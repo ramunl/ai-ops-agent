@@ -1,0 +1,45 @@
+name: Deploy AI Ops Agent
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate deploy webhook URL
+        shell: python
+        run: |
+          import os
+          import sys
+          from urllib.parse import urlparse
+
+          url = os.environ.get("DEPLOY_WEBHOOK_URL", "")
+          parsed = urlparse(url)
+
+          checks = [
+              (bool(url), "DEPLOY_WEBHOOK_URL is empty"),
+              (parsed.scheme == "http", "DEPLOY_WEBHOOK_URL must use http"),
+              (parsed.hostname == "161.35.17.201", "DEPLOY_WEBHOOK_URL host is not the expected server IP"),
+              (parsed.port == 9000, "DEPLOY_WEBHOOK_URL port must be 9000"),
+              (parsed.path == "/hooks/ai-ops-agent-update", "DEPLOY_WEBHOOK_URL path must be /hooks/ai-ops-agent-update"),
+              (parsed.query.startswith("secret="), "DEPLOY_WEBHOOK_URL must include the secret query parameter"),
+          ]
+
+          errors = [message for ok, message in checks if not ok]
+          if errors:
+              for message in errors:
+                  print(f"::error::{message}")
+              sys.exit(1)
+
+          print("DEPLOY_WEBHOOK_URL format OK")
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+
+      - name: Call deploy webhook
+        run: curl --fail --show-error --silent -X POST "$DEPLOY_WEBHOOK_URL"
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}

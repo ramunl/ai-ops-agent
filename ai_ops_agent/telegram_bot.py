@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import config
 from .shell import run
+from .version import get_runtime_version
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/restart <service> - restart a service\n\n"
             "Updates:\n"
             "/update - check available updates\n"
-            "/upgrade - install updates\n",
+            "/upgrade - install updates\n\n"
+            "Agent:\n"
+            "/version - show running bot version, branch, and commit\n",
         )
 
 
@@ -184,6 +187,12 @@ async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply(update, "Done:\n" + output[-1500:])
 
 
+async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_authorized(update):
+        result = await asyncio.to_thread(get_runtime_version)
+        await reply(update, result)
+
+
 def build_application() -> Application:
     app = Application.builder().token(config.OPS_TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -197,4 +206,5 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("upgrade", upgrade))
+    app.add_handler(CommandHandler("version", version))
     return app
