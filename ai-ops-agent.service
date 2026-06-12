@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram AI ops agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-ops-agent
+EnvironmentFile=/etc/ai-ops-agent.env
+ExecStart=/opt/ai_ops_venv/bin/python -m ai_ops_agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
