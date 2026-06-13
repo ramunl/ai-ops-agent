@@ -6,6 +6,8 @@ from .shell import run
 ROOT_DIR = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT_DIR / "VERSION"
 
+_ERROR_PREFIXES = ("Error:", "Command timed out", "[exit", "(exit")
+
 
 def get_version() -> str:
     try:
@@ -15,17 +17,17 @@ def get_version() -> str:
 
 
 def get_git_branch() -> str:
-    try:
-        return run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
-    except Exception:
+    result = run(["git", "-C", str(ROOT_DIR), "rev-parse", "--abbrev-ref", "HEAD"])
+    if any(result.startswith(p) for p in _ERROR_PREFIXES):
         return "unknown"
+    return result.strip()
 
 
 def get_git_commit() -> str:
-    try:
-        return run(["git", "rev-parse", "--short", "HEAD"]).strip()
-    except Exception:
+    result = run(["git", "-C", str(ROOT_DIR), "rev-parse", "--short", "HEAD"])
+    if any(result.startswith(p) for p in _ERROR_PREFIXES):
         return "unknown"
+    return result.strip()
 
 
 def get_runtime_version() -> str:

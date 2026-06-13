@@ -12,17 +12,25 @@ def run(cmd: list[str], timeout: int = DEFAULT_TIMEOUT) -> str:
     """Run a command given as an argument list (never shell=True)."""
     logger.info("Running command: %s timeout=%s", cmd, timeout)
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
         )
-        output = (result.stdout + result.stderr).strip()
-        isEmpty = not output
-        if isEmpty:
-            output = f"(no output, exit code {result.returncode})"
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            logger.error("Command timed out: %s", cmd)
+            return f"Command timed out after {timeout}s"
+        output = (stdout + stderr).strip()
+        if not output:
+            return f"(exit {proc.returncode})"
+        if proc.returncode != 0:
+            return f"[exit {proc.returncode}] {output}"
         return output
-    except subprocess.TimeoutExpired:
-        logger.error("Command timed out: %s", cmd)
-        return f"Command timed out after {timeout}s"
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logger.error("Command failed: %s — %s", cmd, e)
+        return f"Error: {e}"
