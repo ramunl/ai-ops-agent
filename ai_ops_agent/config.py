@@ -23,7 +23,7 @@ except ValueError:
 # never allow arbitrary service names from user input.
 MANAGED_SERVICES = ["ai-agent", "ai-ops-agent"]
 
-# Default service for /logs and /errors when none is given.
+# Default service for /logs when none is given.
 DEFAULT_SERVICE = "ai-agent"
 
 assert DEFAULT_SERVICE in MANAGED_SERVICES, (

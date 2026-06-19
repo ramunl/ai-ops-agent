@@ -21,7 +21,7 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /uptime | Uptime and load average |
 | /services | Status of managed services |
 | /logs [service] | Last 30 log lines (default: ai-agent) |
-| /errors [service] | Recent error-level log lines |
+| /errors [service] | Recent error-level log lines (default: all managed services) |
 | /restart <service> | Restart a whitelisted service |
 | /update | apt update + list upgradable packages |
 | /upgrade | apt upgrade -y |

@@ -158,6 +158,13 @@ def resolve_service(args: list[str] | None) -> str | None:
     return None
 
 
+def _journalctl_unit_args(services: list[str]) -> list[str]:
+    args = []
+    for service in services:
+        args.extend(["-u", service])
+    return args
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -174,7 +181,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "<b>🔧 Services</b>\n"
             "/services — status of managed services\n"
             "/logs [service] — recent logs\n"
-            "/errors [service] — recent errors\n"
+            "/errors [service] — recent errors, all services by default\n"
             "/restart &lt;service&gt; — restart a service\n\n"
             "<b>📦 Updates</b>\n"
             "/update — check available updates\n"
@@ -316,19 +323,32 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def errors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        service = resolve_service(context.args)
-        if service is not None:
-            output = await arun(
-                ["journalctl", "-u", service, "-n", "300", "--no-pager", "-p", "err"]
-            )
-            await reply_expandable(
-                update, f"🚨 Errors — <code>{html.escape(service)}</code>", output
-            )
+        if context.args:
+            service = resolve_service(context.args)
+            if service is None:
+                await reply(
+                    update,
+                    "Unknown service. Allowed: " + ", ".join(config.MANAGED_SERVICES),
+                )
+                return
+            services = [service]
+            header = f"🚨 Errors — <code>{html.escape(service)}</code>"
         else:
-            await reply(
-                update,
-                "Unknown service. Allowed: " + ", ".join(config.MANAGED_SERVICES),
-            )
+            services = config.MANAGED_SERVICES
+            header = "🚨 Errors — all managed services"
+
+        output = await arun(
+            [
+                "journalctl",
+                *_journalctl_unit_args(services),
+                "-n",
+                "300",
+                "--no-pager",
+                "-p",
+                "err",
+            ]
+        )
+        await reply_expandable(update, header, output)
 
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
