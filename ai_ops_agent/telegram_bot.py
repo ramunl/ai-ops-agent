@@ -1,8 +1,12 @@
 """Telegram bot exposing server operations commands."""
 
 import asyncio
+from dataclasses import dataclass
 import html
+import json
 import logging
+import re
+from urllib import error, request
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -14,6 +18,44 @@ from .version import get_git_branch, get_git_commit, get_version
 logger = logging.getLogger(__name__)
 
 _C_LOCALE_ENV = {"LC_ALL": "C"}
+_APT_UPGRADABLE_RE = re.compile(
+    r"^(?P<name>[^/\s]+)/(?P<suites>\S+)\s+"
+    r"(?P<version>\S+)\s+(?P<arch>\S+)"
+    r"(?:\s+\[upgradable from:\s+(?P<old>[^\]]+)\])?"
+)
+_UNTESTED_APT_CHANNELS = (
+    "proposed",
+    "backports",
+    "testing",
+    "unstable",
+    "experimental",
+    "devel",
+)
+_MAX_UPDATE_ITEMS_PER_SECTION = 30
+
+
+@dataclass(frozen=True)
+class AptUpdate:
+    name: str
+    suites: tuple[str, ...]
+    version: str
+    arch: str
+    old_version: str | None
+
+    @property
+    def channel(self) -> str:
+        return ",".join(self.suites)
+
+
+@dataclass(frozen=True)
+class AptUpdateReport:
+    critical: list[AptUpdate]
+    stable: list[AptUpdate]
+    not_recommended: list[AptUpdate]
+
+    @property
+    def total(self) -> int:
+        return len(self.critical) + len(self.stable) + len(self.not_recommended)
 
 
 async def arun(cmd: list[str], **kwargs) -> str:
@@ -69,6 +111,35 @@ async def reply_html(update: Update, text: str) -> None:
     if len(text) > config.TELEGRAM_MESSAGE_LIMIT:
         text = text[: config.TELEGRAM_MESSAGE_LIMIT - len(_SUFFIX)] + _SUFFIX
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def send_rich_message(update: Update, html_text: str) -> bool:
+    """Send a Bot API 10.1 rich message. Return False if unsupported/unavailable."""
+    if update.message is None:
+        return False
+
+    payload = {
+        "chat_id": update.message.chat_id,
+        "rich_message": {"html": html_text},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        f"https://api.telegram.org/bot{config.OPS_TELEGRAM_BOT_TOKEN}/sendRichMessage",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    def _post() -> bool:
+        try:
+            with request.urlopen(req, timeout=15) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                return bool(body.get("ok"))
+        except (OSError, error.HTTPError, json.JSONDecodeError):
+            logger.info("sendRichMessage unavailable; falling back to HTML", exc_info=True)
+            return False
+
+    return await asyncio.to_thread(_post)
 
 
 def _usage_bar(pct: float, width: int = 10) -> str:
@@ -163,6 +234,183 @@ def _journalctl_unit_args(services: list[str]) -> list[str]:
     for service in services:
         args.extend(["-u", service])
     return args
+
+
+def _parse_apt_upgradable(raw: str) -> list[AptUpdate]:
+    updates = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if (
+            not line
+            or line == "Listing..."
+            or line.startswith("WARNING:")
+            or line.startswith("N:")
+        ):
+            continue
+        match = _APT_UPGRADABLE_RE.match(line)
+        if not match:
+            continue
+        suites = tuple(
+            suite.strip() for suite in match.group("suites").split(",") if suite.strip()
+        )
+        updates.append(
+            AptUpdate(
+                name=match.group("name"),
+                suites=suites,
+                version=match.group("version"),
+                arch=match.group("arch"),
+                old_version=match.group("old"),
+            )
+        )
+    return updates
+
+
+def _group_apt_updates(raw: str) -> AptUpdateReport:
+    grouped = {"critical": [], "stable": [], "not_recommended": []}
+    for item in _parse_apt_upgradable(raw):
+        grouped[_classify_apt_update(item)].append(item)
+    return AptUpdateReport(
+        critical=grouped["critical"],
+        stable=grouped["stable"],
+        not_recommended=grouped["not_recommended"],
+    )
+
+
+def _classify_apt_update(item: AptUpdate) -> str:
+    channel = item.channel.lower()
+    if "security" in channel:
+        return "critical"
+    if any(marker in channel for marker in _UNTESTED_APT_CHANNELS):
+        return "not_recommended"
+    return "stable"
+
+
+def _format_update_summary_html(report: AptUpdateReport) -> str:
+    if report.total == 0:
+        return "✅ <b>Update check</b>\n\nNo upgradable packages found."
+
+    action = "Review only."
+    if report.critical:
+        action = "Install security updates soon."
+    elif report.stable and not report.not_recommended:
+        action = "Regular update looks safe."
+    elif report.not_recommended:
+        action = "Review not recommended packages before upgrading."
+
+    return "\n".join(
+        [
+            "📦 <b>Update check</b>",
+            "",
+            f"<b>Total:</b> <code>{report.total}</code> package(s)",
+            f"🚨 <b>Critical/security:</b> <code>{len(report.critical)}</code>",
+            f"✅ <b>Stable:</b> <code>{len(report.stable)}</code>",
+            "⚠️ <b>Not tested / not recommended:</b> "
+            f"<code>{len(report.not_recommended)}</code>",
+            "",
+            f"<b>Recommendation:</b> {html.escape(action)}",
+        ]
+    )
+
+
+def _format_apt_item_html(item: AptUpdate) -> str:
+    old = f" ← {item.old_version}" if item.old_version else ""
+    return (
+        f"• <code>{html.escape(item.name)}</code> "
+        f"<b>{html.escape(item.version)}</b>{html.escape(old)}\n"
+        f"  <i>{html.escape(item.arch)} · {html.escape(item.channel)}</i>"
+    )
+
+
+def _format_update_items_html(items: list[AptUpdate]) -> str:
+    if not items:
+        return "None."
+    shown = items[:_MAX_UPDATE_ITEMS_PER_SECTION]
+    lines = [_format_apt_item_html(item) for item in shown]
+    hidden = len(items) - len(shown)
+    if hidden > 0:
+        lines.append(f"… and {hidden} more package(s)")
+    return "\n".join(lines)
+
+
+def _format_update_fallback_html(report: AptUpdateReport) -> str:
+    if report.total == 0:
+        return _format_update_summary_html(report)
+
+    return "\n\n".join(
+        [
+            _format_update_summary_html(report),
+            "<blockquote expandable>"
+            "<b>🚨 Critical / security</b>\n"
+            "Security repository updates.\n\n"
+            f"{_format_update_items_html(report.critical)}"
+            "</blockquote>",
+            "<blockquote expandable>"
+            "<b>✅ Stable</b>\n"
+            "Regular distribution updates.\n\n"
+            f"{_format_update_items_html(report.stable)}"
+            "</blockquote>",
+            "<blockquote expandable>"
+            "<b>⚠️ Not tested / not recommended</b>\n"
+            "Proposed, backports, testing, unstable, experimental, or devel channels.\n\n"
+            f"{_format_update_items_html(report.not_recommended)}"
+            "</blockquote>",
+        ]
+    )
+
+
+def _format_update_rich_html(report: AptUpdateReport) -> str:
+    if report.total == 0:
+        return "<h3>Update check</h3><p>No upgradable packages found.</p>"
+
+    return "\n".join(
+        [
+            "<h3>📦 Update check</h3>",
+            "<ul>",
+            f"<li><b>Total:</b> <code>{report.total}</code> package(s)</li>",
+            f"<li>🚨 <b>Critical/security:</b> <code>{len(report.critical)}</code></li>",
+            f"<li>✅ <b>Stable:</b> <code>{len(report.stable)}</code></li>",
+            "<li>⚠️ <b>Not tested / not recommended:</b> "
+            f"<code>{len(report.not_recommended)}</code></li>",
+            "</ul>",
+            f"<p><b>Recommendation:</b> {html.escape(_recommend_update_action(report))}</p>",
+            "<details open>",
+            "<summary>🚨 Critical / security</summary>",
+            "<p>Security repository updates.</p>",
+            f"<p>{_format_update_items_html(report.critical).replace(chr(10), '<br>')}</p>",
+            "</details>",
+            "<details>",
+            "<summary>✅ Stable</summary>",
+            "<p>Regular distribution updates.</p>",
+            f"<p>{_format_update_items_html(report.stable).replace(chr(10), '<br>')}</p>",
+            "</details>",
+            "<details>",
+            "<summary>⚠️ Not tested / not recommended</summary>",
+            "<p>Proposed, backports, testing, unstable, experimental, or devel channels.</p>",
+            f"<p>{_format_update_items_html(report.not_recommended).replace(chr(10), '<br>')}</p>",
+            "</details>",
+        ]
+    )
+
+
+def _recommend_update_action(report: AptUpdateReport) -> str:
+    if report.critical:
+        return "Install security updates soon."
+    if report.stable and not report.not_recommended:
+        return "Regular update looks safe."
+    if report.not_recommended:
+        return "Review not recommended packages before upgrading."
+    return "Review only."
+
+
+def _format_update_report(raw: str) -> str:
+    return _format_update_fallback_html(_group_apt_updates(raw))
+
+
+async def reply_update_report(update: Update, raw: str) -> None:
+    report = _group_apt_updates(raw)
+    rich_sent = await send_rich_message(update, _format_update_rich_html(report))
+    if not rich_sent:
+        await reply_html(update, _format_update_fallback_html(report))
 
 
 # ---------------------------------------------------------------- commands
@@ -394,7 +642,10 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await reply_expandable(update, "⚠️ apt-get update failed", update_result)
             return
         output = await arun(["apt", "list", "--upgradable"], timeout=120)
-        await reply_expandable(update, "📦 Upgradable packages", output)
+        if output.startswith("[exit") or output.startswith("Error:"):
+            await reply_expandable(update, "⚠️ apt list failed", output)
+            return
+        await reply_update_report(update, output)
 
 
 async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
