@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import config
 from .shell import run
-from .version import get_runtime_version
+from .version import get_git_branch, get_git_commit, get_version
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,56 @@ async def reply_expandable(update: Update, header: str, body: str) -> None:
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def reply_html(update: Update, text: str) -> None:
+    """Reply with HTML-formatted text, truncated to fit Telegram's limit."""
+    if len(text) > config.TELEGRAM_MESSAGE_LIMIT:
+        text = text[: config.TELEGRAM_MESSAGE_LIMIT - len(_SUFFIX)] + _SUFFIX
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+def _usage_bar(pct: float, width: int = 10) -> str:
+    """Render a Unicode progress bar for a 0-100 percentage."""
+    pct = max(0.0, min(100.0, pct))
+    filled = int(round(pct / 100 * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _fmt_bytes(n: float) -> str:
+    """Human-readable size, e.g. 4.0G."""
+    for unit in ("B", "K", "M", "G", "T", "P"):
+        if n < 1024 or unit == "P":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}P"
+
+
+def _mem_usage(free_b: str) -> tuple[int, int] | None:
+    """(used_bytes, total_bytes) parsed from `free -b`, or None on failure."""
+    for line in free_b.splitlines():
+        if line.startswith("Mem:"):
+            parts = line.split()
+            try:
+                total = int(parts[1])
+                available = int(parts[6]) if len(parts) > 6 else None
+                used = total - available if available is not None else int(parts[2])
+                return used, total
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def _disk_usage(df_hp: str) -> tuple[str, str, float] | None:
+    """(used, size, percent) parsed from `df -hP /`, or None on failure."""
+    lines = df_hp.splitlines()
+    if len(lines) < 2:
+        return None
+    parts = lines[1].split()
+    try:
+        return parts[2], parts[1], float(parts[4].rstrip("%"))
+    except (ValueError, IndexError):
+        return None
+
+
 def _strip_exit_prefix(raw: str) -> str:
     """'[exit 3] inactive' → 'inactive'"""
     if raw.startswith("[exit") and "] " in raw:
@@ -95,24 +145,24 @@ def resolve_service(args: list[str] | None) -> str | None:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        await reply(
+        await reply_html(
             update,
-            "🛠 Ops Agent ready!\n\n"
-            "Server info:\n"
-            "/health - CPU, RAM, disk summary\n"
-            "/disk - disk usage details\n"
-            "/memory - memory details\n"
-            "/uptime - uptime and load\n\n"
-            "Services:\n"
-            "/services - status of managed services\n"
-            "/logs [service] - recent logs\n"
-            "/errors [service] - recent errors\n"
-            "/restart <service> - restart a service\n\n"
-            "Updates:\n"
-            "/update - check available updates\n"
-            "/upgrade - install updates\n\n"
-            "Agent:\n"
-            "/version - show running bot version, branch, and commit\n",
+            "🛠 <b>Ops Agent</b> — ready\n\n"
+            "<b>📊 Server info</b>\n"
+            "/health — CPU, RAM, disk summary\n"
+            "/disk — disk usage details\n"
+            "/memory — memory details\n"
+            "/uptime — uptime and load\n\n"
+            "<b>🔧 Services</b>\n"
+            "/services — status of managed services\n"
+            "/logs [service] — recent logs\n"
+            "/errors [service] — recent errors\n"
+            "/restart &lt;service&gt; — restart a service\n\n"
+            "<b>📦 Updates</b>\n"
+            "/update — check available updates\n"
+            "/upgrade — install updates\n\n"
+            "<b>🤖 Agent</b>\n"
+            "/version — running bot version, branch, and commit",
         )
 
 
@@ -120,18 +170,39 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
         load_raw, memory_raw, disk_raw = await asyncio.gather(
             arun(["cat", "/proc/loadavg"]),
-            arun(["free", "-h"]),
-            arun(["df", "-h", "/"]),
+            arun(["free", "-b"]),
+            arun(["df", "-hP", "/"]),
         )
         parts = load_raw.split()
-        load_str = "  ".join(parts[:3]) if len(parts) >= 3 else load_raw
-        text = (
-            "❤️ <b>Health</b>\n\n"
-            f"<b>Load (1m / 5m / 15m):</b>  {html.escape(load_str)}\n\n"
-            f"<b>Memory:</b>\n<pre>{html.escape(memory_raw)}</pre>\n\n"
-            f"<b>Disk (/):</b>\n<pre>{html.escape(disk_raw)}</pre>"
-        )
-        await update.message.reply_text(text, parse_mode="HTML")
+        load_str = " · ".join(parts[:3]) if len(parts) >= 3 else load_raw
+        lines = [
+            "❤️ <b>Health</b>",
+            "",
+            f"<b>Load</b>  {html.escape(load_str)}   <i>1m·5m·15m</i>",
+        ]
+        mem = _mem_usage(memory_raw)
+        if mem:
+            used, total = mem
+            pct = used / total * 100 if total else 0
+            lines.append(
+                f"<b>RAM </b> <code>{_usage_bar(pct)}</code> {pct:.0f}%   "
+                f"{_fmt_bytes(used)} / {_fmt_bytes(total)}"
+            )
+        disk = _disk_usage(disk_raw)
+        if disk:
+            used, size, pct = disk
+            lines.append(
+                f"<b>Disk</b> <code>{_usage_bar(pct)}</code> {pct:.0f}%   "
+                f"{html.escape(used)} / {html.escape(size)}"
+            )
+        if not mem or not disk:
+            # Parsing failed for at least one metric — fall back to raw tables.
+            lines += [
+                "",
+                f"<pre>{html.escape(memory_raw)}</pre>",
+                f"<pre>{html.escape(disk_raw)}</pre>",
+            ]
+        await reply_html(update, "\n".join(lines))
 
 
 async def disk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -148,8 +219,18 @@ async def memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def uptime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        raw = await arun(["uptime"])
-        await reply(update, f"⏱ Uptime: {raw}")
+        pretty, load_raw = await asyncio.gather(
+            arun(["uptime", "-p"]),
+            arun(["cat", "/proc/loadavg"]),
+        )
+        parts = load_raw.split()
+        load_str = " · ".join(parts[:3]) if len(parts) >= 3 else load_raw
+        text = (
+            "⏱ <b>Uptime</b>\n\n"
+            f"{html.escape(pretty)}\n"
+            f"<b>load:</b> {html.escape(load_str)}   <i>1m·5m·15m</i>"
+        )
+        await reply_html(update, text)
 
 
 async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -157,12 +238,12 @@ async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         results = await asyncio.gather(
             *(arun(["systemctl", "is-active", name]) for name in config.MANAGED_SERVICES)
         )
-        lines = []
+        lines = ["🔧 <b>Services</b>", ""]
         for name, raw in zip(config.MANAGED_SERVICES, results):
             state = _strip_exit_prefix(raw).strip()
             icon = "✅" if state == "active" else "❌"
-            lines.append(f"{icon} {name}: {state}")
-        await reply(update, "🔧 Services:\n" + "\n".join(lines))
+            lines.append(f"{icon} <code>{html.escape(name)}</code> — {html.escape(state)}")
+        await reply_html(update, "\n".join(lines))
 
 
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -264,8 +345,15 @@ async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        result = await asyncio.to_thread(get_runtime_version)
-        await reply(update, result)
+        ver, branch, commit = await asyncio.to_thread(
+            lambda: (get_version(), get_git_branch(), get_git_commit())
+        )
+        text = (
+            f"🤖 <b>ai_ops_agent</b> <code>v{html.escape(ver)}</code>\n"
+            f"<b>branch:</b> <code>{html.escape(branch)}</code>\n"
+            f"<b>commit:</b> <code>{html.escape(commit)}</code>"
+        )
+        await reply_html(update, text)
 
 
 def build_application() -> Application:
