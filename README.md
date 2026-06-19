@@ -15,6 +15,7 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 
 | Command | Description |
 |---|---|
+| /help | Command list |
 | /health | CPU load, RAM, disk summary |
 | /disk | Disk usage details |
 | /memory | Memory details |

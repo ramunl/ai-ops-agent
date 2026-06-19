@@ -173,6 +173,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_html(
             update,
             "🛠 <b>Ops Agent</b> — ready\n\n"
+            "/help — show this command list\n\n"
             "<b>📊 Server info</b>\n"
             "/health — CPU, RAM, disk summary\n"
             "/disk — disk usage details\n"
@@ -430,6 +431,7 @@ async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 def build_application() -> Application:
     app = Application.builder().token(config.OPS_TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("disk", disk))
     app.add_handler(CommandHandler("memory", memory))
