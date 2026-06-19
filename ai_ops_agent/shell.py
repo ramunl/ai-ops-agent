@@ -1,6 +1,7 @@
 """Safe shell command execution for ops tasks."""
 
 import logging
+import os
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -8,15 +9,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 120
 
 
-def run(cmd: list[str], timeout: int = DEFAULT_TIMEOUT) -> str:
+def run(
+    cmd: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    env: dict[str, str] | None = None,
+) -> str:
     """Run a command given as an argument list (never shell=True)."""
     logger.info("Running command: %s timeout=%s", cmd, timeout)
     try:
+        process_env = os.environ.copy()
+        if env:
+            process_env.update(env)
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=process_env,
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)

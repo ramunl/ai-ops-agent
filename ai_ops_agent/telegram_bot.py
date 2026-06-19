@@ -13,6 +13,8 @@ from .version import get_git_branch, get_git_commit, get_version
 
 logger = logging.getLogger(__name__)
 
+_C_LOCALE_ENV = {"LC_ALL": "C"}
+
 
 async def arun(cmd: list[str], **kwargs) -> str:
     return await asyncio.to_thread(run, cmd, **kwargs)
@@ -186,8 +188,8 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
         load_raw, memory_raw, disk_raw = await asyncio.gather(
             arun(["cat", "/proc/loadavg"]),
-            arun(["free", "-b"]),
-            arun(["df", "-hP", "/"]),
+            arun(["free", "-b"], env=_C_LOCALE_ENV),
+            arun(["df", "-hP", "/"], env=_C_LOCALE_ENV),
         )
         parts = load_raw.split()
         load_str = " · ".join(parts[:3]) if len(parts) >= 3 else load_raw
@@ -223,7 +225,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def disk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        raw = await arun(["df", "-hP"])
+        raw = await arun(["df", "-hP"], env=_C_LOCALE_ENV)
         rows = _disk_rows(raw)
         if not rows:
             # Parsing failed / no block devices — fall back to the raw table.
@@ -240,7 +242,7 @@ async def disk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        raw = await arun(["free", "-b"])
+        raw = await arun(["free", "-b"], env=_C_LOCALE_ENV)
         mem = _free_usage(raw, "Mem:")
         if not mem:
             await reply_code(update, "🧠 Memory", raw)
