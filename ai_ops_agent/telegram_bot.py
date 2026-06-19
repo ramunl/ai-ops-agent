@@ -85,15 +85,17 @@ def _fmt_bytes(n: float) -> str:
     return f"{n:.1f}P"
 
 
-def _mem_usage(free_b: str) -> tuple[int, int] | None:
-    """(used_bytes, total_bytes) parsed from `free -b`, or None on failure."""
+def _free_usage(free_b: str, label: str = "Mem:") -> tuple[int, int] | None:
+    """(used_bytes, total_bytes) for a `free -b` row ("Mem:"/"Swap:"), or None."""
     for line in free_b.splitlines():
-        if line.startswith("Mem:"):
+        if line.startswith(label):
             parts = line.split()
             try:
                 total = int(parts[1])
-                available = int(parts[6]) if len(parts) > 6 else None
-                used = total - available if available is not None else int(parts[2])
+                if label == "Mem:" and len(parts) > 6:
+                    used = total - int(parts[6])  # total - available
+                else:
+                    used = int(parts[2])
                 return used, total
             except (ValueError, IndexError):
                 return None
@@ -110,6 +112,20 @@ def _disk_usage(df_hp: str) -> tuple[str, str, float] | None:
         return parts[2], parts[1], float(parts[4].rstrip("%"))
     except (ValueError, IndexError):
         return None
+
+
+def _disk_rows(df_hp: str) -> list[tuple[str, str, str, float]]:
+    """[(mount, used, size, percent), ...] for real block devices from `df -hP`."""
+    rows = []
+    for line in df_hp.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 6 or not parts[0].startswith("/dev/"):
+            continue
+        try:
+            rows.append((parts[5], parts[2], parts[1], float(parts[4].rstrip("%"))))
+        except (ValueError, IndexError):
+            continue
+    return rows
 
 
 def _strip_exit_prefix(raw: str) -> str:
@@ -180,7 +196,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "",
             f"<b>Load</b>  {html.escape(load_str)}   <i>1m·5m·15m</i>",
         ]
-        mem = _mem_usage(memory_raw)
+        mem = _free_usage(memory_raw)
         if mem:
             used, total = mem
             pct = used / total * 100 if total else 0
@@ -207,14 +223,47 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def disk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        raw = await arun(["df", "-h"])
-        await reply_code(update, "💾 Disk usage", _filter_disk(raw))
+        raw = await arun(["df", "-hP"])
+        rows = _disk_rows(raw)
+        if not rows:
+            # Parsing failed / no block devices — fall back to the raw table.
+            await reply_code(update, "💾 Disk usage", _filter_disk(raw))
+            return
+        lines = ["💾 <b>Disk usage</b>", ""]
+        for mount, used, size, pct in rows:
+            lines.append(
+                f"<b>{html.escape(mount)}</b> <code>{_usage_bar(pct)}</code> "
+                f"{pct:.0f}%   {html.escape(used)} / {html.escape(size)}"
+            )
+        await reply_html(update, "\n".join(lines))
 
 
 async def memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        raw = await arun(["free", "-h"])
-        await reply_code(update, "🧠 Memory", raw)
+        raw = await arun(["free", "-b"])
+        mem = _free_usage(raw, "Mem:")
+        if not mem:
+            await reply_code(update, "🧠 Memory", raw)
+            return
+        used, total = mem
+        pct = used / total * 100 if total else 0
+        lines = [
+            "🧠 <b>Memory</b>",
+            "",
+            f"<b>RAM </b> <code>{_usage_bar(pct)}</code> {pct:.0f}%   "
+            f"{_fmt_bytes(used)} / {_fmt_bytes(total)}",
+        ]
+        swap = _free_usage(raw, "Swap:")
+        if swap and swap[1] > 0:
+            sused, stotal = swap
+            spct = sused / stotal * 100
+            lines.append(
+                f"<b>Swap</b> <code>{_usage_bar(spct)}</code> {spct:.0f}%   "
+                f"{_fmt_bytes(sused)} / {_fmt_bytes(stotal)}"
+            )
+        elif swap:
+            lines.append("<b>Swap</b> <i>none configured</i>")
+        await reply_html(update, "\n".join(lines))
 
 
 async def uptime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
