@@ -28,6 +28,8 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /update | apt update + classify upgradable packages by critical, stable, and not recommended channels |
 | /upgrade | apt upgrade -y |
 | /version | Running bot version, branch, and commit |
+| /ai_version | Installed AI agents, versions, git refs, service states, configured models, and latest status |
+| /ai_update [agent] | Update all AI agents by default, or one agent by name/alias |
 
 Only whitelisted services can be managed (see `config.py`), and only the authorized chat ID can issue commands.
 

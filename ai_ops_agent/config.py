@@ -32,3 +32,28 @@ assert DEFAULT_SERVICE in MANAGED_SERVICES, (
 
 # Max characters per Telegram message (hard limit is 4096).
 TELEGRAM_MESSAGE_LIMIT = 4000
+
+# AI agents reported by /ai_version.
+AI_AGENT_INSTALLS = [
+    {
+        "name": "ai-coding-agent",
+        "aliases": ("coding", "coder", "ai-agent"),
+        "path": os.environ.get("AI_CODING_AGENT_DIR", "/opt/ai-coding-agent"),
+        "service": os.environ.get("AI_CODING_AGENT_SERVICE", "ai-agent"),
+        "env_file": os.environ.get("AI_CODING_AGENT_ENV", "/etc/ai-agent.env"),
+    },
+    {
+        "name": "ai-pm-agent",
+        "aliases": ("pm", "project-manager"),
+        "path": os.environ.get("AI_PM_AGENT_DIR", "/opt/ai-pm-agent"),
+        "service": os.environ.get("AI_PM_AGENT_SERVICE", "ai-pm-agent"),
+        "env_file": os.environ.get("AI_PM_AGENT_ENV", "/etc/ai-pm-agent.env"),
+    },
+    {
+        "name": "ai-ops-agent",
+        "aliases": ("ops", "bot"),
+        "path": os.environ.get("AI_OPS_AGENT_DIR", "/opt/ai-ops-agent"),
+        "service": os.environ.get("AI_OPS_AGENT_SERVICE", "ai-ops-agent"),
+        "env_file": os.environ.get("AI_OPS_AGENT_ENV", "/etc/ai-ops-agent.env"),
+    },
+]

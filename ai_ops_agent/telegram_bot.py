@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import html
 import json
 import logging
+from pathlib import Path
 import re
 from urllib import error, request
 
@@ -32,6 +33,16 @@ _UNTESTED_APT_CHANNELS = (
     "devel",
 )
 _MAX_UPDATE_ITEMS_PER_SECTION = 30
+_MODEL_ENV_KEYS = (
+    "AI_MODEL",
+    "MODEL",
+    "OPENAI_MODEL",
+    "CODEX_MODEL",
+    "PM_MODEL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_MODEL",
+    "LLM_MODEL",
+)
 
 
 @dataclass(frozen=True)
@@ -229,11 +240,301 @@ def resolve_service(args: list[str] | None) -> str | None:
     return None
 
 
+def _agent_match_keys(agent: dict) -> set[str]:
+    name = agent["name"]
+    keys = {
+        name,
+        name.removeprefix("ai-").removesuffix("-agent"),
+    }
+    service = agent.get("service")
+    if service:
+        keys.add(service)
+    keys.update(agent.get("aliases", ()))
+    return {key.lower() for key in keys}
+
+
+def resolve_ai_agents(args: list[str] | None) -> list[dict] | None:
+    """Return all configured AI agents, or one matched by name/alias."""
+    if not args:
+        return list(config.AI_AGENT_INSTALLS)
+
+    requested = args[0].lower()
+    for agent in config.AI_AGENT_INSTALLS:
+        if requested in _agent_match_keys(agent):
+            return [agent]
+    return None
+
+
+def _ai_agent_names() -> str:
+    return ", ".join(agent["name"] for agent in config.AI_AGENT_INSTALLS)
+
+
+def _self_ai_agent_service() -> str:
+    for agent in config.AI_AGENT_INSTALLS:
+        if agent["name"] == "ai-ops-agent":
+            return agent.get("service", "")
+    return ""
+
+
 def _journalctl_unit_args(services: list[str]) -> list[str]:
     args = []
     for service in services:
         args.extend(["-u", service])
     return args
+
+
+def _read_text_file(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    raw = _read_text_file(path)
+    if raw is None:
+        return {}
+
+    values = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            values[key] = value
+    return values
+
+
+def _agent_version(path: Path) -> str:
+    version = _read_text_file(path / "VERSION")
+    if version:
+        return version
+
+    pyproject = _read_text_file(path / "pyproject.toml")
+    if pyproject:
+        match = re.search(r'(?m)^version\s*=\s*["\']([^"\']+)["\']', pyproject)
+        if match:
+            return match.group(1)
+
+    package_json = _read_text_file(path / "package.json")
+    if package_json:
+        try:
+            version = json.loads(package_json).get("version")
+        except json.JSONDecodeError:
+            version = None
+        if version:
+            return str(version)
+
+    return "unknown"
+
+
+def _agent_model(env_file: str | None) -> str:
+    if not env_file:
+        return "unknown"
+    env = _parse_env_file(Path(env_file))
+    models = [env[key] for key in _MODEL_ENV_KEYS if env.get(key)]
+    return ", ".join(models) if models else "unknown"
+
+
+async def _agent_latest_status(path: Path) -> str:
+    upstream = await arun(
+        [
+            "git",
+            "-C",
+            str(path),
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{u}",
+        ]
+    )
+    if upstream.startswith("[exit") or upstream.startswith("Error:") or not upstream:
+        return "unknown (no upstream)"
+
+    fetch = await arun(
+        ["git", "-C", str(path), "fetch", "--quiet", "--prune"],
+        timeout=60,
+    )
+    if fetch.startswith("[exit") or fetch.startswith("Error:"):
+        return "unknown (fetch failed)"
+
+    counts = await arun(
+        [
+            "git",
+            "-C",
+            str(path),
+            "rev-list",
+            "--left-right",
+            "--count",
+            "HEAD...@{u}",
+        ]
+    )
+    if counts.startswith("[exit") or counts.startswith("Error:"):
+        return "unknown (compare failed)"
+
+    try:
+        ahead, behind = (int(part) for part in counts.split()[:2])
+    except (ValueError, IndexError):
+        return "unknown (bad compare output)"
+
+    if ahead == 0 and behind == 0:
+        return f"up to date with {upstream}"
+    if ahead == 0:
+        return f"behind {upstream} by {behind} commit(s)"
+    if behind == 0:
+        return f"ahead of {upstream} by {ahead} commit(s)"
+    return f"diverged from {upstream}: ahead {ahead}, behind {behind}"
+
+
+async def _inspect_ai_agent(agent: dict[str, str]) -> dict[str, str]:
+    path = Path(agent["path"])
+    installed = path.exists()
+    version, model = await asyncio.to_thread(
+        lambda: (
+            _agent_version(path) if installed else "not installed",
+            _agent_model(agent.get("env_file")) if installed else "unknown",
+        )
+    )
+
+    branch = commit = latest = "unknown"
+    if installed:
+        branch, commit, latest = await asyncio.gather(
+            arun(["git", "-C", str(path), "branch", "--show-current"]),
+            arun(["git", "-C", str(path), "rev-parse", "--short", "HEAD"]),
+            _agent_latest_status(path),
+        )
+        if branch.startswith("[exit") or branch.startswith("Error:") or not branch:
+            branch = "unknown"
+        if commit.startswith("[exit") or commit.startswith("Error:") or not commit:
+            commit = "unknown"
+
+    service = agent.get("service") or ""
+    service_state = "not configured"
+    if service:
+        service_state = _strip_exit_prefix(
+            await arun(["systemctl", "is-active", service])
+        ).strip()
+
+    return {
+        "name": agent["name"],
+        "installed": "yes" if installed else "no",
+        "path": str(path),
+        "service": service or "none",
+        "service_state": service_state,
+        "version": version,
+        "model": model,
+        "branch": branch,
+        "commit": commit,
+        "latest": latest,
+    }
+
+
+def _format_ai_agent_info(agent: dict[str, str]) -> list[str]:
+    return [
+        f"<b>{html.escape(agent['name'])}</b>",
+        f"installed: <code>{html.escape(agent['installed'])}</code>",
+        f"path: <code>{html.escape(agent['path'])}</code>",
+        f"service: <code>{html.escape(agent['service'])}</code> "
+        f"({html.escape(agent['service_state'])})",
+        f"version: <code>{html.escape(agent['version'])}</code>",
+        f"model: <code>{html.escape(agent['model'])}</code>",
+        f"git: <code>{html.escape(agent['branch'])}</code> "
+        f"<code>{html.escape(agent['commit'])}</code>",
+        f"latest: <code>{html.escape(agent['latest'])}</code>",
+    ]
+
+
+def _update_result_failed(output: str) -> bool:
+    return output.startswith("[exit") or output.startswith("Error:")
+
+
+async def _restart_ai_agent_service(
+    service: str,
+    *,
+    no_block: bool = False,
+) -> str:
+    if not service:
+        return "not configured"
+    command = ["systemctl", "restart"]
+    if no_block:
+        command.append("--no-block")
+    command.append(service)
+    result = await arun(command, timeout=30)
+    if _update_result_failed(result):
+        return f"restart failed: {result}"
+    if no_block:
+        return "restart queued"
+    state = _strip_exit_prefix(await arun(["systemctl", "is-active", service])).strip()
+    return f"restarted, state: {state}"
+
+
+async def _update_ai_agent(agent: dict, *, defer_self_restart: bool) -> dict[str, str]:
+    path = Path(agent["path"])
+    name = agent["name"]
+    service = agent.get("service") or ""
+    if not path.exists():
+        return {
+            "name": name,
+            "status": "skipped",
+            "detail": f"not installed at {path}",
+            "restart": "not run",
+        }
+
+    before = await arun(["git", "-C", str(path), "rev-parse", "--short", "HEAD"])
+    if _update_result_failed(before) or not before:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"cannot read current commit: {before}",
+            "restart": "not run",
+        }
+
+    pull = await arun(["git", "-C", str(path), "pull", "--ff-only"], timeout=180)
+    if _update_result_failed(pull):
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": pull,
+            "restart": "not run",
+        }
+
+    after = await arun(["git", "-C", str(path), "rev-parse", "--short", "HEAD"])
+    if _update_result_failed(after) or not after:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"cannot read updated commit: {after}",
+            "restart": "not run",
+        }
+    changed = after != before
+    status = "updated" if changed else "already current"
+    detail = f"{before} → {after}" if changed else before
+
+    if not changed:
+        restart = "not needed"
+    elif name == "ai-ops-agent" and defer_self_restart:
+        restart = "deferred until after report"
+    else:
+        restart = await _restart_ai_agent_service(service)
+
+    return {
+        "name": name,
+        "status": status,
+        "detail": detail,
+        "restart": restart,
+    }
+
+
+def _format_ai_update_result(result: dict[str, str]) -> list[str]:
+    return [
+        f"<b>{html.escape(result['name'])}</b>",
+        f"status: <code>{html.escape(result['status'])}</code>",
+        f"detail: <code>{html.escape(result['detail'])}</code>",
+        f"service: <code>{html.escape(result['restart'])}</code>",
+    ]
 
 
 def _parse_apt_upgradable(raw: str) -> list[AptUpdate]:
@@ -438,7 +739,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/update — check available updates\n"
             "/upgrade — install updates\n\n"
             "<b>🤖 Agent</b>\n"
-            "/version — running bot version, branch, and commit",
+            "/version — running bot version, branch, and commit\n"
+            "/ai_version — installed AI agents, versions, models, and latest status\n"
+            "/ai_update [agent] — update all AI agents or one by name",
         )
 
 
@@ -689,6 +992,61 @@ async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_html(update, text)
 
 
+async def ai_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_authorized(update):
+        agents = await asyncio.gather(
+            *(_inspect_ai_agent(agent) for agent in config.AI_AGENT_INSTALLS)
+        )
+        lines = ["🤖 <b>AI agents</b>", ""]
+        for idx, agent in enumerate(agents):
+            if idx:
+                lines.append("")
+            lines.extend(_format_ai_agent_info(agent))
+        await reply_html(update, "\n".join(lines))
+
+
+async def ai_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_authorized(update):
+        agents = resolve_ai_agents(context.args)
+        if agents is None:
+            await reply(
+                update,
+                "Unknown AI agent. Allowed: " + _ai_agent_names(),
+            )
+            return
+
+        target = "all AI agents" if not context.args else agents[0]["name"]
+        await reply(update, f"⬇️ Updating {target}...")
+        results = []
+        restart_self = False
+        for agent in agents:
+            result = await _update_ai_agent(agent, defer_self_restart=True)
+            results.append(result)
+            if (
+                agent["name"] == "ai-ops-agent"
+                and result["restart"] == "deferred until after report"
+            ):
+                restart_self = True
+
+        lines = ["🤖 <b>AI update</b>", ""]
+        for idx, result in enumerate(results):
+            if idx:
+                lines.append("")
+            lines.extend(_format_ai_update_result(result))
+        if restart_self:
+            lines += [
+                "",
+                "<i>ai-ops-agent changed; restarting this bot after this report.</i>",
+            ]
+        await reply_html(update, "\n".join(lines))
+
+        if restart_self:
+            await _restart_ai_agent_service(
+                _self_ai_agent_service(),
+                no_block=True,
+            )
+
+
 def build_application() -> Application:
     app = Application.builder().token(config.OPS_TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -705,4 +1063,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("version", version))
+    app.add_handler(CommandHandler("ai_version", ai_version))
+    app.add_handler(CommandHandler("ai_update", ai_update))
     return app
