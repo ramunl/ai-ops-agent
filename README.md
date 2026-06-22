@@ -24,6 +24,7 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /logs [service] | Last 30 log lines (default: ai-agent) |
 | /errors [service] | Recent error-level log lines (default: all managed services) |
 | /restart <service> | Restart a whitelisted service |
+| /reboot | Reboot the whole system |
 | /update | apt update + classify upgradable packages by critical, stable, and not recommended channels |
 | /upgrade | apt upgrade -y |
 | /version | Running bot version, branch, and commit |

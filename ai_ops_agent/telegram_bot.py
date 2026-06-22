@@ -432,6 +432,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/logs [service] — recent logs\n"
             "/errors [service] — recent errors, all services by default\n"
             "/restart &lt;service&gt; — restart a service\n\n"
+            "<b>⚙️ System</b>\n"
+            "/reboot — reboot the whole system\n\n"
             "<b>📦 Updates</b>\n"
             "/update — check available updates\n"
             "/upgrade — install updates\n\n"
@@ -634,6 +636,14 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+async def reboot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_authorized(update):
+        await reply(update, "🔁 Rebooting the whole system now...")
+        result = await arun(["systemctl", "reboot"], timeout=15)
+        if result.startswith("[exit") or result.startswith("Error:"):
+            await reply_expandable(update, "⚠️ Reboot failed", result)
+
+
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
         await reply(update, "🔍 Checking for updates...")
@@ -691,6 +701,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("logs", logs))
     app.add_handler(CommandHandler("errors", errors))
     app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(CommandHandler("reboot", reboot))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("version", version))
