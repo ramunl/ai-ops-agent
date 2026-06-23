@@ -33,7 +33,32 @@ assert DEFAULT_SERVICE in MANAGED_SERVICES, (
 # Max characters per Telegram message (hard limit is 4096).
 TELEGRAM_MESSAGE_LIMIT = 4000
 
-# AI agents reported by /ai_version.
+# AI command-line tools reported and updated by /ai_tools.
+AI_SYSTEM_INSTALLS = [
+    {
+        "name": "codex",
+        "aliases": ("openai", "openai-codex"),
+        "version_cmd": ("codex", "--version"),
+        "package_manager": "npm",
+        "package": os.environ.get("AI_CODEX_NPM_PACKAGE", "@openai/codex"),
+        "model_env_keys": ("CODEX_MODEL", "OPENAI_MODEL", "AI_MODEL", "MODEL"),
+        "env_file": os.environ.get("AI_CODEX_ENV", "/etc/ai-agent.env"),
+    },
+    {
+        "name": "claude",
+        "aliases": ("claude-code", "anthropic"),
+        "version_cmd": ("claude", "--version"),
+        "package_manager": "npm",
+        "package": os.environ.get(
+            "AI_CLAUDE_NPM_PACKAGE",
+            "@anthropic-ai/claude-code",
+        ),
+        "model_env_keys": ("CLAUDE_MODEL", "ANTHROPIC_MODEL", "AI_MODEL", "MODEL"),
+        "env_file": os.environ.get("AI_CLAUDE_ENV", "/etc/ai-agent.env"),
+    },
+]
+
+# AI agents reported by /my_agents.
 AI_AGENT_INSTALLS = [
     {
         "name": "ai-coding-agent",

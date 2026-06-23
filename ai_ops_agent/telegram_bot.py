@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import html
 import json
 import logging
+import os
 from pathlib import Path
 import re
 from urllib import error, request
@@ -265,8 +266,34 @@ def resolve_ai_agents(args: list[str] | None) -> list[dict] | None:
     return None
 
 
+def _ai_system_match_keys(system: dict) -> set[str]:
+    keys = {system["name"]}
+    keys.update(system.get("aliases", ()))
+    package = system.get("package")
+    if package:
+        keys.add(package)
+        keys.add(package.rsplit("/", 1)[-1])
+    return {key.lower() for key in keys}
+
+
+def resolve_ai_systems(args: list[str] | None) -> list[dict] | None:
+    """Return all configured AI systems, or one matched by name/alias/package."""
+    if not args or args[0].lower() == "all":
+        return list(config.AI_SYSTEM_INSTALLS)
+
+    requested = args[0].lower()
+    for system in config.AI_SYSTEM_INSTALLS:
+        if requested in _ai_system_match_keys(system):
+            return [system]
+    return None
+
+
 def _ai_agent_names() -> str:
     return ", ".join(agent["name"] for agent in config.AI_AGENT_INSTALLS)
+
+
+def _ai_system_names() -> str:
+    return ", ".join(system["name"] for system in config.AI_SYSTEM_INSTALLS)
 
 
 def _self_ai_agent_service() -> str:
@@ -337,6 +364,123 @@ def _agent_model(env_file: str | None) -> str:
     env = _parse_env_file(Path(env_file))
     models = [env[key] for key in _MODEL_ENV_KEYS if env.get(key)]
     return ", ".join(models) if models else "unknown"
+
+
+def _system_model(system: dict) -> str:
+    values = []
+    keys = system.get("model_env_keys") or _MODEL_ENV_KEYS
+    env_file = system.get("env_file")
+    if env_file:
+        env = _parse_env_file(Path(env_file))
+        values.extend(env[key] for key in keys if env.get(key))
+    values.extend(os.environ[key] for key in keys if os.environ.get(key))
+    seen = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return ", ".join(seen) if seen else "unknown"
+
+
+def _parse_tool_version(raw: str) -> str:
+    if _update_result_failed(raw) or raw.startswith("Command timed out"):
+        return "not installed"
+    return raw.splitlines()[0].strip() if raw.strip() else "unknown"
+
+
+async def _npm_latest_version(package: str) -> str:
+    latest = await arun(["npm", "view", package, "version"], timeout=60)
+    if _update_result_failed(latest) or latest.startswith("Command timed out"):
+        return "unknown"
+    return latest.splitlines()[-1].strip() if latest.strip() else "unknown"
+
+
+def _version_is_current(installed: str, latest: str) -> str:
+    if installed == "not installed":
+        return "not installed"
+    if latest == "unknown":
+        return "unknown"
+    if latest and latest in installed:
+        return "up to date"
+    return f"update available: {latest}"
+
+
+async def _inspect_ai_system(system: dict) -> dict[str, str]:
+    version_cmd = list(system["version_cmd"])
+    version_raw, latest, model = await asyncio.gather(
+        arun(version_cmd, timeout=30),
+        _npm_latest_version(system["package"])
+        if system.get("package_manager") == "npm" and system.get("package")
+        else asyncio.to_thread(lambda: "unknown"),
+        asyncio.to_thread(lambda: _system_model(system)),
+    )
+    installed = _parse_tool_version(version_raw)
+    return {
+        "name": system["name"],
+        "installed": "yes" if installed != "not installed" else "no",
+        "version": installed,
+        "model": model,
+        "package_manager": system.get("package_manager", "unknown"),
+        "package": system.get("package", "unknown"),
+        "latest": latest,
+        "status": _version_is_current(installed, latest),
+        "update_command": f"/ai_tools update {system['name']}",
+    }
+
+
+def _format_ai_system_info(system: dict[str, str]) -> list[str]:
+    return [
+        f"<b>{html.escape(system['name'])}</b>",
+        f"installed: <code>{html.escape(system['installed'])}</code>",
+        f"version: <code>{html.escape(system['version'])}</code>",
+        f"model: <code>{html.escape(system['model'])}</code>",
+        f"package: <code>{html.escape(system['package_manager'])}</code> "
+        f"<code>{html.escape(system['package'])}</code>",
+        f"latest: <code>{html.escape(system['latest'])}</code>",
+        f"status: <code>{html.escape(system['status'])}</code>",
+        f"update: <code>{html.escape(system['update_command'])}</code>",
+    ]
+
+
+async def _update_ai_system(system: dict) -> dict[str, str]:
+    name = system["name"]
+    package_manager = system.get("package_manager")
+    package = system.get("package")
+    if package_manager != "npm" or not package:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": "no supported update command configured",
+        }
+
+    before = _parse_tool_version(await arun(list(system["version_cmd"]), timeout=30))
+    update = await arun(["npm", "install", "-g", f"{package}@latest"], timeout=300)
+    if _update_result_failed(update) or update.startswith("Command timed out"):
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": update,
+        }
+
+    after = _parse_tool_version(await arun(list(system["version_cmd"]), timeout=30))
+    if before == after:
+        status = "already current"
+        detail = after
+    else:
+        status = "updated"
+        detail = f"{before} → {after}"
+    return {
+        "name": name,
+        "status": status,
+        "detail": detail,
+    }
+
+
+def _format_ai_system_update_result(result: dict[str, str]) -> list[str]:
+    return [
+        f"<b>{html.escape(result['name'])}</b>",
+        f"status: <code>{html.escape(result['status'])}</code>",
+        f"detail: <code>{html.escape(result['detail'])}</code>",
+    ]
 
 
 async def _agent_latest_status(path: Path) -> str:
@@ -740,7 +884,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/upgrade — install updates\n\n"
             "<b>🤖 Agent</b>\n"
             "/version — running bot version, branch, and commit\n"
-            "/ai_version — installed AI agents, versions, models, and latest status\n"
+            "/my_agents — installed AI agents, versions, models, and latest status\n"
+            "/ai_tools — installed AI tools, versions, models, and update status\n"
+            "/ai_tools update &lt;codex|claude|all&gt; — update AI tools\n"
             "/ai_update [agent] — update all AI agents or one by name",
         )
 
@@ -992,7 +1138,7 @@ async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply_html(update, text)
 
 
-async def ai_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def my_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
         agents = await asyncio.gather(
             *(_inspect_ai_agent(agent) for agent in config.AI_AGENT_INSTALLS)
@@ -1002,6 +1148,47 @@ async def ai_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if idx:
                 lines.append("")
             lines.extend(_format_ai_agent_info(agent))
+        await reply_html(update, "\n".join(lines))
+
+
+async def ai_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_authorized(update):
+        if context.args and context.args[0].lower() == "update":
+            systems = resolve_ai_systems(context.args[1:])
+            if systems is None:
+                await reply(
+                    update,
+                    "Unknown AI tool. Allowed: " + _ai_system_names(),
+                )
+                return
+
+            target = "all AI tools" if len(systems) > 1 else systems[0]["name"]
+            await reply(update, f"⬇️ Updating {target}...")
+            results = []
+            for system in systems:
+                results.append(await _update_ai_system(system))
+            lines = ["🤖 <b>AI tool update</b>", ""]
+            for idx, result in enumerate(results):
+                if idx:
+                    lines.append("")
+                lines.extend(_format_ai_system_update_result(result))
+            await reply_html(update, "\n".join(lines))
+            return
+
+        systems = await asyncio.gather(
+            *(_inspect_ai_system(system) for system in config.AI_SYSTEM_INSTALLS)
+        )
+        lines = ["🤖 <b>AI tools</b>", ""]
+        for idx, system in enumerate(systems):
+            if idx:
+                lines.append("")
+            lines.extend(_format_ai_system_info(system))
+        lines += [
+            "",
+            "Use <code>/ai_tools update codex</code>, "
+            "<code>/ai_tools update claude</code>, or "
+            "<code>/ai_tools update all</code>.",
+        ]
         await reply_html(update, "\n".join(lines))
 
 
@@ -1063,6 +1250,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("version", version))
-    app.add_handler(CommandHandler("ai_version", ai_version))
+    app.add_handler(CommandHandler("my_agents", my_agents))
+    app.add_handler(CommandHandler("ai_tools", ai_tools))
     app.add_handler(CommandHandler("ai_update", ai_update))
     return app
