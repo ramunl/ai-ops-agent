@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from urllib import error, request
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import config
@@ -43,6 +43,26 @@ _MODEL_ENV_KEYS = (
     "ANTHROPIC_MODEL",
     "CLAUDE_MODEL",
     "LLM_MODEL",
+)
+
+BOT_COMMANDS = (
+    BotCommand("start", "Start the ops bot"),
+    BotCommand("help", "Show the command list"),
+    BotCommand("health", "Show CPU, RAM, and disk summary"),
+    BotCommand("disk", "Show disk usage details"),
+    BotCommand("memory", "Show memory details"),
+    BotCommand("uptime", "Show uptime and load"),
+    BotCommand("services", "Show managed service status"),
+    BotCommand("logs", "Show recent service logs"),
+    BotCommand("errors", "Show recent service errors"),
+    BotCommand("restart", "Restart a managed service"),
+    BotCommand("reboot", "Reboot the whole system"),
+    BotCommand("update", "Check available system updates"),
+    BotCommand("upgrade", "Install system updates"),
+    BotCommand("version", "Show the running bot version"),
+    BotCommand("my_agents", "Show installed AI agents"),
+    BotCommand("ai_tools", "Show or update installed AI tools"),
+    BotCommand("ai_update", "Update installed AI agents"),
 )
 
 
@@ -1234,8 +1254,19 @@ async def ai_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+async def register_bot_commands(application: Application) -> None:
+    """Publish commands so Telegram clients show suggestions after typing `/`."""
+    await application.bot.set_my_commands(BOT_COMMANDS)
+    logger.info("Registered %d Telegram command hints", len(BOT_COMMANDS))
+
+
 def build_application() -> Application:
-    app = Application.builder().token(config.OPS_TELEGRAM_BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(config.OPS_TELEGRAM_BOT_TOKEN)
+        .post_init(register_bot_commands)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("health", health))
