@@ -1,4 +1,4 @@
-name: Lint
+name: Tests
 
 on:
   pull_request:
@@ -7,18 +7,19 @@ on:
     branches: [main]
 
 jobs:
-  lint:
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Compile check
-        run: python -m compileall -q .
+      - name: Install development dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Check Python style
+        run: |
+          ruff check ai_ops_agent tests
+          ruff format --check ai_ops_agent tests
+          ruff check ai_ops_agent --select ANN001,ANN201,ANN202,D100,D101,D102,D103
+      - name: Run regression tests
+        run: python -m pytest -q

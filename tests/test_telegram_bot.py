@@ -1,8 +1,8 @@
 """Focused tests for Telegram command hint registration."""
 
 import os
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 os.environ.setdefault("OPS_TELEGRAM_BOT_TOKEN", "123456:test-token")
@@ -33,7 +33,9 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
             for command in getattr(handler, "commands", ())
         }
 
-        self.assertEqual({command.command for command in BOT_COMMANDS}, handler_commands)
+        self.assertEqual(
+            {command.command for command in BOT_COMMANDS}, handler_commands
+        )
         self.assertIs(application.post_init, register_bot_commands)
 
 
