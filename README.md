@@ -21,7 +21,7 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /memory | Memory details |
 | /uptime | Uptime and load average |
 | /services | Status of managed services |
-| /logs [service] | Last 30 log lines (default: ai-agent) |
+| /logs [service] | Last 30 log lines (default: ai-coding-agent) |
 | /errors [service] | Recent error-level log lines (default: all managed services) |
 | /restart <service> | Restart a whitelisted service |
 | /reboot | Reboot the whole system |
