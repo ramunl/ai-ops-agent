@@ -10,14 +10,30 @@ from pathlib import Path
 import re
 from urllib import error, request
 
-from telegram import BotCommand, Update
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+
+from ai_agent_common import (
+    Command,
+    CoreCommand,
+    build_command_list,
+    is_authorized as shared_is_authorized,
+    to_bot_commands,
+)
 
 from . import config
 from .shell import run
-from .version import get_git_branch, get_git_commit, get_version
+from .version import get_runtime_version
 
 logger = logging.getLogger(__name__)
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+_CORE_COMMAND = CoreCommand(
+    submodule_dir=ROOT_DIR / "ai_agent_common",
+    superproject_dir=ROOT_DIR,
+    submodule_path="ai_agent_common",
+    agent_name="ai-ops-agent",
+)
 
 _C_LOCALE_ENV = {"LC_ALL": "C"}
 _APT_UPGRADABLE_RE = re.compile(
@@ -45,25 +61,27 @@ _MODEL_ENV_KEYS = (
     "LLM_MODEL",
 )
 
-BOT_COMMANDS = (
-    BotCommand("start", "Start the ops bot"),
-    BotCommand("help", "Show the command list"),
-    BotCommand("health", "Show CPU, RAM, and disk summary"),
-    BotCommand("disk", "Show disk usage details"),
-    BotCommand("memory", "Show memory details"),
-    BotCommand("uptime", "Show uptime and load"),
-    BotCommand("services", "Show managed service status"),
-    BotCommand("logs", "Show recent service logs"),
-    BotCommand("errors", "Show recent service errors"),
-    BotCommand("restart", "Restart a managed service"),
-    BotCommand("reboot", "Reboot the whole system"),
-    BotCommand("update", "Check available system updates"),
-    BotCommand("upgrade", "Install system updates"),
-    BotCommand("version", "Show the running bot version"),
-    BotCommand("my_agents", "Show installed AI agents"),
-    BotCommand("ai_tools", "Show or update installed AI tools"),
-    BotCommand("ai_update", "Update installed AI agents"),
+COMMANDS = build_command_list(
+    [
+        Command("start", "Start the ops bot"),
+        Command("health", "Show CPU, RAM, and disk summary"),
+        Command("disk", "Show disk usage details"),
+        Command("memory", "Show memory details"),
+        Command("uptime", "Show uptime and load"),
+        Command("services", "Show managed service status"),
+        Command("logs", "Show recent service logs"),
+        Command("errors", "Show recent service errors"),
+        Command("restart", "Restart a managed service"),
+        Command("reboot", "Reboot the whole system"),
+        Command("update", "Check available system updates"),
+        Command("upgrade", "Install system updates"),
+        Command("core", "Show the shared core version"),
+        Command("my_agents", "Show installed AI agents"),
+        Command("ai_tools", "Show or update installed AI tools"),
+        Command("ai_update", "Update installed AI agents"),
+    ]
 )
+BOT_COMMANDS = tuple(to_bot_commands(COMMANDS))
 
 
 @dataclass(frozen=True)
@@ -95,16 +113,13 @@ async def arun(cmd: list[str], **kwargs) -> str:
 
 
 def is_authorized(update: Update) -> bool:
-    isAuthorized = (
-        update.message is not None
-        and update.message.chat_id == config.AUTHORIZED_CHAT_ID
-    )
-    if not isAuthorized:
+    authorized = shared_is_authorized(update, config.AUTHORIZED_CHAT_ID)
+    if not authorized:
         logger.warning(
             "Ignored message from unauthorized chat: %s",
-            update.message.chat_id if update.message else "unknown",
+            getattr(getattr(update, "effective_chat", None), "id", "unknown"),
         )
-    return isAuthorized
+    return authorized
 
 
 _SUFFIX = "\n... (truncated)"
@@ -665,6 +680,26 @@ async def _update_ai_agent(agent: dict, *, defer_self_restart: bool) -> dict[str
             "restart": "not run",
         }
 
+    submodules = await arun(
+        [
+            "git",
+            "-C",
+            str(path),
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ],
+        timeout=180,
+    )
+    if _update_result_failed(submodules):
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": f"submodule sync failed: {submodules}",
+            "restart": "not run",
+        }
+
     after = await arun(["git", "-C", str(path), "rev-parse", "--short", "HEAD"])
     if _update_result_failed(after) or not after:
         return {
@@ -904,6 +939,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/upgrade — install updates\n\n"
             "<b>🤖 Agent</b>\n"
             "/version — running bot version, branch, and commit\n"
+            "/core — shared core version\n"
             "/my_agents — installed AI agents, versions, models, and latest status\n"
             "/ai_tools — installed AI tools, versions, models, and update status\n"
             "/ai_tools update &lt;codex|claude|all&gt; — update AI tools\n"
@@ -1147,15 +1183,15 @@ async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_authorized(update):
-        ver, branch, commit = await asyncio.to_thread(
-            lambda: (get_version(), get_git_branch(), get_git_commit())
-        )
-        text = (
-            f"🤖 <b>ai_ops_agent</b> <code>v{html.escape(ver)}</code>\n"
-            f"<b>branch:</b> <code>{html.escape(branch)}</code>\n"
-            f"<b>commit:</b> <code>{html.escape(commit)}</code>"
-        )
-        await reply_html(update, text)
+        text = await asyncio.to_thread(get_runtime_version)
+        await reply(update, f"{text}\n{_CORE_COMMAND.short_line()}")
+
+
+async def core(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report this bot's pinned shared-core version."""
+    if is_authorized(update):
+        text = await asyncio.to_thread(_CORE_COMMAND.status_text)
+        await reply(update, text)
 
 
 async def my_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1281,6 +1317,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("version", version))
+    app.add_handler(CommandHandler("core", core))
     app.add_handler(CommandHandler("my_agents", my_agents))
     app.add_handler(CommandHandler("ai_tools", ai_tools))
     app.add_handler(CommandHandler("ai_update", ai_update))
