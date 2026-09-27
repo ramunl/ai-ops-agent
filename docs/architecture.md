@@ -10,7 +10,7 @@ builds the Telegram application and registers autocomplete commands. The existin
 | --- | --- |
 | `bot/catalog.py` | Command names and autocomplete descriptions |
 | `bot/transport.py` | Owner authorization, bounded replies, HTML, rich-message fallback |
-| `bot/help.py` | Help and running version commands |
+| `bot/help.py` | Help, shared runtime version, and core status commands |
 | `bot/system.py` | Health, disk, memory, and uptime commands |
 | `bot/services.py` | Whitelisted service status, logs, errors, restarts, and reboot |
 | `bot/packages.py` | Package refresh and upgrade commands |
@@ -35,7 +35,9 @@ Every command checks the owner chat before reading data or invoking operations.
 Service names are resolved against `MANAGED_SERVICES`; target aliases resolve
 only to configured agent/tool records. Subprocesses receive argument lists.
 
-`/ai_update` fast-forwards selected checkouts. An unchanged checkout does not
+`/ai_update` fast-forwards selected checkouts and initializes their submodules
+recursively before reading the final revision. A failed submodule update stops
+the operation without restarting a service. An unchanged checkout does not
 restart. Changed non-self agents restart immediately. A changed ops agent defers
 its own restart until after the result has been sent, then requests a nonblocking
 restart. A failed pull or unreadable revision never triggers a restart.

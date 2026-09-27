@@ -1,15 +1,22 @@
-"""Show help and the running agent version."""
-
-from __future__ import annotations
+"""Show help, runtime versions, and shared-core status."""
 
 import asyncio
-import html
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ai_ops_agent.bot.transport import is_authorized, reply_html
-from ai_ops_agent.version import get_git_branch, get_git_commit, get_version
+from ai_agent_common import CoreCommand
+from ai_ops_agent.bot.transport import is_authorized, reply, reply_html
+from ai_ops_agent.version import get_runtime_version
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+_CORE_COMMAND = CoreCommand(
+    submodule_dir=ROOT_DIR / "ai_agent_common",
+    superproject_dir=ROOT_DIR,
+    submodule_path="ai_agent_common",
+    agent_name="ai-ops-agent",
+)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -37,6 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/upgrade — install updates\n\n"
         "<b>🤖 Agent</b>\n"
         "/version — running bot version, branch, and commit\n"
+        "/core — shared core version\n"
         "/my_agents — installed AI agents, versions, models, and latest status\n"
         "/ai_tools — installed AI tools, versions, models, and update status\n"
         "/ai_tools update &lt;codex|claude|all&gt; — update AI tools\n"
@@ -45,15 +53,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Report the ops agent version, branch, and commit."""
+    """Report the runtime and shared-core versions."""
     if not is_authorized(update):
         return
-    ver, branch, commit = await asyncio.to_thread(
-        lambda: (get_version(), get_git_branch(), get_git_commit())
-    )
-    text = (
-        f"🤖 <b>ai_ops_agent</b> <code>v{html.escape(ver)}</code>\n"
-        f"<b>branch:</b> <code>{html.escape(branch)}</code>\n"
-        f"<b>commit:</b> <code>{html.escape(commit)}</code>"
-    )
-    await reply_html(update, text)
+    text = await asyncio.to_thread(get_runtime_version)
+    await reply(update, f"{text}\n{_CORE_COMMAND.short_line()}")
+
+
+async def core(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report this bot's pinned shared-core version."""
+    if not is_authorized(update):
+        return
+    text = await asyncio.to_thread(_CORE_COMMAND.status_text)
+    await reply(update, text)

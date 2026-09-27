@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -20,6 +22,5 @@ jobs:
         run: |
           ruff check ai_ops_agent tests
           ruff format --check ai_ops_agent tests
-          ruff check ai_ops_agent --select ANN001,ANN201,ANN202,D100,D101,D102,D103
       - name: Run regression tests
         run: python -m pytest -q

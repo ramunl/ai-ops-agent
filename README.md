@@ -21,13 +21,14 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /memory | Memory details |
 | /uptime | Uptime and load average |
 | /services | Status of managed services |
-| /logs [service] | Last 30 log lines (default: ai-agent) |
+| /logs [service] | Last 30 log lines (default: ai-coding-agent) |
 | /errors [service] | Recent error-level log lines (default: all managed services) |
 | /restart <service> | Restart a whitelisted service |
 | /reboot | Reboot the whole system |
 | /update | apt update + classify upgradable packages by critical, stable, and not recommended channels |
 | /upgrade | apt upgrade -y |
 | /version | Running bot version, branch, and commit |
+| /core | Pinned `ai-agent-common` core version |
 | /my_agents | Installed AI agents, versions, git refs, service states, configured models, and latest status |
 | /ai_tools | Installed AI tools, versions, configured models, and update status |
 | /ai_tools update <codex\|claude\|all> | Update installed AI tools |
@@ -41,7 +42,7 @@ Only whitelisted services can be managed (see `config.py`), and only the authori
 # 1. Create a SECOND Telegram bot via @BotFather (e.g. @channelcast_ops_bot)
 
 # 2. Clone and install
-sudo git clone git@github.com:ramunl/ai-ops-agent.git /opt/ai-ops-agent
+sudo git clone --recurse-submodules git@github.com:ramunl/ai-ops-agent.git /opt/ai-ops-agent
 python3 -m venv /opt/ai_ops_venv
 /opt/ai_ops_venv/bin/pip install -r /opt/ai-ops-agent/requirements.txt
 
@@ -129,7 +130,7 @@ Successful deploy log shape:
 The `/version` command reports:
 
 ```text
-ai_ops_agent v<VERSION>
+ai-ops-agent v<VERSION>
 branch: <git-branch>
 commit: <short-sha>
 ```
@@ -146,7 +147,6 @@ See [architecture and failure handling](docs/architecture.md).
 python -m pip install -r requirements-dev.txt
 ruff check ai_ops_agent tests
 ruff format --check ai_ops_agent tests
-ruff check ai_ops_agent --select ANN001,ANN201,ANN202,D100,D101,D102,D103
 python -m pytest -q
 ```
 

@@ -21,10 +21,10 @@ except ValueError:
 
 # Services this bot is allowed to manage. Whitelist only —
 # never allow arbitrary service names from user input.
-MANAGED_SERVICES = ["ai-agent", "ai-ops-agent"]
+MANAGED_SERVICES = ["ai-coding-agent", "ai-ops-agent"]
 
 # Default service for /logs when none is given.
-DEFAULT_SERVICE = "ai-agent"
+DEFAULT_SERVICE = "ai-coding-agent"
 
 assert DEFAULT_SERVICE in MANAGED_SERVICES, (
     f"DEFAULT_SERVICE '{DEFAULT_SERVICE}' not in MANAGED_SERVICES"
@@ -42,7 +42,9 @@ AI_SYSTEM_INSTALLS = [
         "package_manager": "npm",
         "package": os.environ.get("AI_CODEX_NPM_PACKAGE", "@openai/codex"),
         "model_env_keys": ("CODEX_MODEL", "OPENAI_MODEL", "AI_MODEL", "MODEL"),
-        "env_file": os.environ.get("AI_CODEX_ENV", "/etc/ai-agent.env"),
+        "env_file": os.environ.get(
+            "AI_CODEX_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
+        ),
     },
     {
         "name": "claude",
@@ -54,7 +56,9 @@ AI_SYSTEM_INSTALLS = [
             "@anthropic-ai/claude-code",
         ),
         "model_env_keys": ("CLAUDE_MODEL", "ANTHROPIC_MODEL", "AI_MODEL", "MODEL"),
-        "env_file": os.environ.get("AI_CLAUDE_ENV", "/etc/ai-agent.env"),
+        "env_file": os.environ.get(
+            "AI_CLAUDE_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
+        ),
     },
 ]
 
@@ -64,8 +68,10 @@ AI_AGENT_INSTALLS = [
         "name": "ai-coding-agent",
         "aliases": ("coding", "coder", "ai-agent"),
         "path": os.environ.get("AI_CODING_AGENT_DIR", "/opt/ai-coding-agent"),
-        "service": os.environ.get("AI_CODING_AGENT_SERVICE", "ai-agent"),
-        "env_file": os.environ.get("AI_CODING_AGENT_ENV", "/etc/ai-agent.env"),
+        "service": os.environ.get("AI_CODING_AGENT_SERVICE", "ai-coding-agent"),
+        "env_file": os.environ.get(
+            "AI_CODING_AGENT_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
+        ),
     },
     {
         "name": "ai-pm-agent",

@@ -2,16 +2,20 @@
 
 import os
 import unittest
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("OPS_TELEGRAM_BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("YOUR_CHAT_ID", "123")
 
+from ai_ops_agent import config
+from ai_ops_agent.fleet import update_agent
 from ai_ops_agent.telegram_bot import (
     BOT_COMMANDS,
     build_application,
     register_bot_commands,
+    version,
 )
 
 
@@ -23,6 +27,57 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
         await register_bot_commands(application)
 
         bot.set_my_commands.assert_awaited_once_with(BOT_COMMANDS)
+
+    def test_shared_base_commands_are_present(self) -> None:
+        names = [command.command for command in BOT_COMMANDS]
+
+        self.assertEqual(names[:2], ["help", "version"])
+
+    async def test_version_uses_shared_runtime_report(self) -> None:
+        message = SimpleNamespace(
+            chat_id=config.AUTHORIZED_CHAT_ID, reply_text=AsyncMock()
+        )
+        update = SimpleNamespace(message=message, effective_chat=None)
+
+        with (
+            patch(
+                "ai_ops_agent.bot.help.asyncio.to_thread",
+                new=AsyncMock(
+                    return_value="ai-ops-agent v1\nbranch: main\ncommit: abc123"
+                ),
+            ),
+            patch(
+                "ai_ops_agent.bot.help._CORE_COMMAND.short_line",
+                return_value="core: v1.1",
+            ),
+        ):
+            await version(update, SimpleNamespace())
+
+        message.reply_text.assert_awaited_once_with(
+            "ai-ops-agent v1\nbranch: main\ncommit: abc123\ncore: v1.1"
+        )
+
+    async def test_agent_update_syncs_submodules_after_pull(self) -> None:
+        with TemporaryDirectory() as temporary_dir:
+            run = AsyncMock(side_effect=["abc123", "Already up to date.", "", "abc123"])
+            agent = {
+                "name": "ai-pm-agent",
+                "path": temporary_dir,
+                "service": "ai-pm-agent",
+            }
+
+            with patch("ai_ops_agent.fleet.run_command", run):
+                result = await update_agent(
+                    agent,
+                    defer_self_restart=False,
+                )
+
+        submodule_call = run.await_args_list[2]
+        self.assertEqual(
+            submodule_call.args[0][-4:],
+            ["submodule", "update", "--init", "--recursive"],
+        )
+        self.assertEqual(result["status"], "already current")
 
     def test_catalog_matches_registered_command_handlers(self) -> None:
         application = build_application()

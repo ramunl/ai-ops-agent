@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def usage_bar(pct: float, width: int = 10) -> str:
     """Render a Unicode progress bar for a 0-100 percentage."""
@@ -32,6 +36,7 @@ def parse_memory_usage(free_b: str, label: str = "Mem:") -> tuple[int, int] | No
                     used = int(parts[2])
                 return used, total
             except (ValueError, IndexError):
+                logger.warning("Could not parse %s memory measurement", label)
                 return None
     return None
 
@@ -45,6 +50,7 @@ def parse_disk_usage(df_hp: str) -> tuple[str, str, float] | None:
     try:
         return parts[2], parts[1], float(parts[4].rstrip("%"))
     except (ValueError, IndexError):
+        logger.warning("Could not parse root disk measurement")
         return None
 
 
@@ -58,12 +64,13 @@ def parse_disk_rows(df_hp: str) -> list[tuple[str, str, str, float]]:
         try:
             rows.append((parts[5], parts[2], parts[1], float(parts[4].rstrip("%"))))
         except (ValueError, IndexError):
+            logger.warning("Skipping invalid block-device measurement")
             continue
     return rows
 
 
 def filter_disk_rows(raw: str) -> str:
-    """Keep only real block-device lines from df output, dropping overlay/tmpfs noise."""
+    """Keep block-device lines from df output, dropping overlay/tmpfs noise."""
     lines = raw.splitlines()
     if not lines:
         return raw

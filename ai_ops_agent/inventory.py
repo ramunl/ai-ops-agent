@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
 
 from ai_ops_agent import config
 from ai_ops_agent.settings import MODEL_ENV_KEYS
+
+logger = logging.getLogger(__name__)
 
 
 def _agent_match_keys(agent: dict) -> set[str]:
@@ -79,7 +82,8 @@ def self_service() -> str:
 def _read_text_file(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as error:
+        logger.debug("Could not read metadata from %s (%s)", path, type(error).__name__)
         return None
 
 
@@ -118,6 +122,7 @@ def read_agent_version(path: Path) -> str:
         try:
             version = json.loads(package_json).get("version")
         except json.JSONDecodeError:
+            logger.warning("Invalid JSON in %s", path / "package.json")
             version = None
         if version:
             return str(version)

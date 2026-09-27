@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from ai_ops_agent.command_output import command_failed, run_command, strip_exit_prefix
 from ai_ops_agent.inventory import read_agent_model, read_agent_version
+
+logger = logging.getLogger(__name__)
 
 
 async def agent_latest_status(path: Path) -> str:
@@ -50,6 +53,7 @@ async def agent_latest_status(path: Path) -> str:
     try:
         ahead, behind = (int(part) for part in counts.split()[:2])
     except (ValueError, IndexError):
+        logger.warning("Could not parse upstream revision counts for %s", path)
         return "unknown (bad compare output)"
 
     if ahead == 0 and behind == 0:
@@ -193,6 +197,12 @@ async def _fast_forward(path: Path) -> _CheckoutUpdate:
     )
     if command_failed(output):
         raise AgentUpdateError(output)
+    submodules = await run_command(
+        ["git", "-C", str(path), "submodule", "update", "--init", "--recursive"],
+        timeout=180,
+    )
+    if command_failed(submodules):
+        raise AgentUpdateError(f"submodule sync failed: {submodules}")
     after = await run_command(command)
     if command_failed(after) or not after:
         raise AgentUpdateError(f"cannot read updated commit: {after}")

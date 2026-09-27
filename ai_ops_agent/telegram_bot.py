@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler
 from ai_ops_agent import config
 from ai_ops_agent.bot.agents import ai_tools, ai_update, my_agents
 from ai_ops_agent.bot.catalog import BOT_COMMANDS
-from ai_ops_agent.bot.help import start, version
+from ai_ops_agent.bot.help import core, start, version
 from ai_ops_agent.bot.packages import update_cmd, upgrade
 from ai_ops_agent.bot.services import errors, logs, reboot, restart, services
 from ai_ops_agent.bot.system import disk, health, memory, uptime
@@ -32,6 +32,7 @@ def build_application() -> Application:
         .build()
     )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("core", core))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("health", health))
     app.add_handler(CommandHandler("disk", disk))

@@ -72,7 +72,8 @@ def _format_update_fallback_html(report: AptUpdateReport) -> str:
             "</blockquote>",
             "<blockquote expandable>"
             "<b>⚠️ Not tested / not recommended</b>\n"
-            "Proposed, backports, testing, unstable, experimental, or devel channels.\n\n"
+            "Proposed, backports, testing, unstable, experimental, "
+            "or devel channels.\n\n"
             f"{_format_update_items_html(report.not_recommended)}"
             "</blockquote>",
         ]
@@ -83,31 +84,37 @@ def _format_update_rich_html(report: AptUpdateReport) -> str:
     if report.total == 0:
         return "<h3>Update check</h3><p>No upgradable packages found.</p>"
 
+    action = html.escape(_recommend_update_action(report))
+    critical = _format_update_items_html(report.critical).replace("\n", "<br>")
+    stable = _format_update_items_html(report.stable).replace("\n", "<br>")
+    review = _format_update_items_html(report.not_recommended).replace("\n", "<br>")
     return "\n".join(
         [
             "<h3>📦 Update check</h3>",
             "<ul>",
             f"<li><b>Total:</b> <code>{report.total}</code> package(s)</li>",
-            f"<li>🚨 <b>Critical/security:</b> <code>{len(report.critical)}</code></li>",
+            "<li>🚨 <b>Critical/security:</b> "
+            f"<code>{len(report.critical)}</code></li>",
             f"<li>✅ <b>Stable:</b> <code>{len(report.stable)}</code></li>",
             "<li>⚠️ <b>Not tested / not recommended:</b> "
             f"<code>{len(report.not_recommended)}</code></li>",
             "</ul>",
-            f"<p><b>Recommendation:</b> {html.escape(_recommend_update_action(report))}</p>",
+            f"<p><b>Recommendation:</b> {action}</p>",
             "<details open>",
             "<summary>🚨 Critical / security</summary>",
             "<p>Security repository updates.</p>",
-            f"<p>{_format_update_items_html(report.critical).replace(chr(10), '<br>')}</p>",
+            f"<p>{critical}</p>",
             "</details>",
             "<details>",
             "<summary>✅ Stable</summary>",
             "<p>Regular distribution updates.</p>",
-            f"<p>{_format_update_items_html(report.stable).replace(chr(10), '<br>')}</p>",
+            f"<p>{stable}</p>",
             "</details>",
             "<details>",
             "<summary>⚠️ Not tested / not recommended</summary>",
-            "<p>Proposed, backports, testing, unstable, experimental, or devel channels.</p>",
-            f"<p>{_format_update_items_html(report.not_recommended).replace(chr(10), '<br>')}</p>",
+            "<p>Proposed, backports, testing, unstable, experimental, "
+            "or devel channels.</p>",
+            f"<p>{review}</p>",
             "</details>",
         ]
     )

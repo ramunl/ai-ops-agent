@@ -1,0 +1,3 @@
+[submodule "ai_agent_common"]
+	path = ai_agent_common
+	url = git@github.com:ramunl/ai-agent-common.git

@@ -26,6 +26,7 @@ from ai_ops_agent.bot import agents, packages, services
         "update_cmd",
         "upgrade",
         "version",
+        "core",
         "my_agents",
         "ai_tools",
         "ai_update",

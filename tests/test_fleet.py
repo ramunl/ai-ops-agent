@@ -43,7 +43,7 @@ def test_only_changed_nonself_agents_restart_immediately(
     tmp_path, monkeypatch, name, before, after, expected_restart
 ):
     monkeypatch.setattr(
-        fleet, "run_command", AsyncMock(side_effect=[before, "updated", after])
+        fleet, "run_command", AsyncMock(side_effect=[before, "updated", "", after])
     )
     restart = AsyncMock(return_value="restarted, state: active")
     monkeypatch.setattr(fleet, "restart_agent_service", restart)
@@ -108,7 +108,7 @@ def test_nonblocking_restart_does_not_poll_service(monkeypatch):
     [
         (["[exit 128] not a repository"], "cannot read current commit"),
         (
-            ["old", "pulled", "Command timed out after 30s"],
+            ["old", "pulled", "", "Command timed out after 30s"],
             "cannot read updated commit",
         ),
     ],
@@ -127,4 +127,26 @@ def test_unreadable_revision_stops_update_without_restart(
     )
     assert result["status"] == "failed"
     assert expected in result["detail"]
+    restart.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "failure", ["[exit 1] unavailable", "Error: denied", "Command timed out after 180s"]
+)
+def test_failed_submodule_sync_never_restarts_agent(tmp_path, monkeypatch, failure):
+    command = AsyncMock(side_effect=["old", "pulled", failure])
+    restart = AsyncMock()
+    monkeypatch.setattr(fleet, "run_command", command)
+    monkeypatch.setattr(fleet, "restart_agent_service", restart)
+
+    result = asyncio.run(
+        fleet.update_agent(
+            {"name": "pm", "path": str(tmp_path), "service": "pm"},
+            defer_self_restart=False,
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert "submodule sync failed" in result["detail"]
+    assert command.await_count == 3
     restart.assert_not_awaited()
