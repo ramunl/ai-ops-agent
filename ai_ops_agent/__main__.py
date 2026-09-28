@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    """Configure and start the Telegram application."""
     logger.info("Ops agent starting")
     app = build_application()
     app.run_polling()

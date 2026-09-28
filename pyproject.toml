@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = ["ai_agent_common"]
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "E501", "F", "I",
+    "B006", "B008", "N",
+    "ANN001", "ANN002", "ANN003", "ANN201", "ANN202",
+    "D100", "D101", "D102", "D103", "D107",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests set dummy credentials before app imports and use dynamic doubles.
+# Production annotations, docstrings, and line limits are enforced above.
+"tests/*.py" = ["E402", "E731", "E501", "ANN", "D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "ai_agent_common/tests"]

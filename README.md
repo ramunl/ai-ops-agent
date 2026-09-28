@@ -130,9 +130,26 @@ Successful deploy log shape:
 The `/version` command reports:
 
 ```text
-ai_ops_agent v<VERSION>
+ai-ops-agent v<VERSION>
 branch: <git-branch>
 commit: <short-sha>
 ```
 
 The version string comes from the top-level `VERSION` file.
+
+## Development
+
+Follow the Python rules in `ai-rules/global/python.md`. Command adapters live in
+`ai_ops_agent/bot`; system and fleet services remain independent of Telegram.
+See [architecture and failure handling](docs/architecture.md).
+
+```bash
+python -m pip install -r requirements-dev.txt
+ruff check ai_ops_agent tests
+ruff format --check ai_ops_agent tests
+python -m pytest -q
+```
+
+Run `ruff format ai_ops_agent tests` before committing. CI uses Python 3.12 and
+runs these checks on pull requests and pushes to `main`. Command timeouts are
+reported as failures, including package upgrades and agent checkout updates.

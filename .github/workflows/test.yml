@@ -1,4 +1,4 @@
-name: Lint
+name: Tests
 
 on:
   pull_request:
@@ -7,26 +7,20 @@ on:
     branches: [main]
 
 jobs:
-  lint:
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
-
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Compile check
-        run: python -m compileall -q .
-
-      - name: Unit tests
-        run: python -m unittest discover -s tests -v
-        env:
-          OPS_TELEGRAM_BOT_TOKEN: test-token
-          YOUR_CHAT_ID: "123"
+      - name: Install development dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Check Python style
+        run: |
+          ruff check ai_ops_agent tests
+          ruff format --check ai_ops_agent tests
+      - name: Run regression tests
+        run: python -m pytest -q

@@ -1,17 +1,18 @@
 """Focused tests for Telegram command hint registration."""
 
 import os
-from types import SimpleNamespace
-from tempfile import TemporaryDirectory
 import unittest
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("OPS_TELEGRAM_BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("YOUR_CHAT_ID", "123")
 
+from ai_ops_agent import config
+from ai_ops_agent.fleet import update_agent
 from ai_ops_agent.telegram_bot import (
     BOT_COMMANDS,
-    _update_ai_agent,
     build_application,
     register_bot_commands,
     version,
@@ -33,15 +34,22 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names[:2], ["help", "version"])
 
     async def test_version_uses_shared_runtime_report(self) -> None:
-        message = SimpleNamespace(chat_id=123, reply_text=AsyncMock())
+        message = SimpleNamespace(
+            chat_id=config.AUTHORIZED_CHAT_ID, reply_text=AsyncMock()
+        )
         update = SimpleNamespace(message=message, effective_chat=None)
 
-        with patch(
-            "ai_ops_agent.telegram_bot.asyncio.to_thread",
-            new=AsyncMock(return_value="ai-ops-agent v1\nbranch: main\ncommit: abc123"),
-        ), patch(
-            "ai_ops_agent.telegram_bot._CORE_COMMAND.short_line",
-            return_value="core: v1.1",
+        with (
+            patch(
+                "ai_ops_agent.bot.help.asyncio.to_thread",
+                new=AsyncMock(
+                    return_value="ai-ops-agent v1\nbranch: main\ncommit: abc123"
+                ),
+            ),
+            patch(
+                "ai_ops_agent.bot.help._CORE_COMMAND.short_line",
+                return_value="core: v1.1",
+            ),
         ):
             await version(update, SimpleNamespace())
 
@@ -58,8 +66,8 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
                 "service": "ai-pm-agent",
             }
 
-            with patch("ai_ops_agent.telegram_bot.arun", run):
-                result = await _update_ai_agent(
+            with patch("ai_ops_agent.fleet.run_command", run):
+                result = await update_agent(
                     agent,
                     defer_self_restart=False,
                 )
