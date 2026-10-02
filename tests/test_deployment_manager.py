@@ -303,6 +303,11 @@ def test_health_rejects_dashboard_application_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(system, "process", lambda _: 9)
     monkeypatch.setattr("ai_ops_agent.deployment.system.time.sleep", lambda _: None)
 
+    clock = iter([0, 31])
+    monkeypatch.setattr(
+        "ai_ops_agent.deployment.system.time.monotonic", lambda: next(clock)
+    )
+
     def fail_health(*_, **__):
         raise OSError("offline")
 
@@ -409,3 +414,28 @@ def test_target_update_log_contains_operation_and_verified_commit(manager, tmp_p
     text = log.read_text()
     assert job["operation"] in text
     assert manager.status()["targets"][0]["current"]["commit"] in text
+
+
+def test_dashboard_waits_for_http_readiness_before_stability(monkeypatch, tmp_path):
+    """A live PID may precede the HTTP listener during normal startup."""
+    from contextlib import contextmanager
+    from io import StringIO
+
+    system = System()
+    target = Target("test", tmp_path, tmp_path, health_url="http://127.0.0.1/healthz")
+    monkeypatch.setattr(system, "process", lambda _: 9)
+    sleeps = []
+    monkeypatch.setattr("ai_ops_agent.deployment.system.time.sleep", sleeps.append)
+    attempts = []
+
+    @contextmanager
+    def health(*_, **__):
+        attempts.append(True)
+        if len(attempts) <= 2:
+            raise OSError("HTTP listener starting")
+        yield StringIO('{"ok": true}')
+
+    monkeypatch.setattr("ai_ops_agent.deployment.system.urllib.request.urlopen", health)
+    system.healthy(target, old_pid=8)
+    assert len(attempts) == 13
+    assert sleeps == [1] * 12
