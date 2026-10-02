@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Compatibility entrypoint; never deploy inside the bot being restarted.
+set -euo pipefail
+TARGET="$(basename "$0")"
+TARGET="${TARGET#update-}"
+REF=main
+for ARG in "$@"; do
+    if [ "$ARG" = --no-restart ]; then
+        echo '--no-restart cannot verify deployment; use ai-deploy submit deploy instead' >&2
+        exit 1
+    fi
+    REF="$ARG"
+done
+install -d -m 755 "/var/log/$TARGET"
+exec /usr/local/sbin/ai-deploy deploy "$TARGET" "$REF" >>"/var/log/$TARGET/update.log" 2>&1

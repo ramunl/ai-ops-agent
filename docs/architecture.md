@@ -19,7 +19,7 @@ builds the Telegram application and registers autocomplete commands. The existin
 | `metrics.py` | Parsing system resource measurements |
 | `packages.py` | Typed package update records and release-channel classification |
 | `inventory.py` | Configured target aliases and local version/model metadata |
-| `fleet.py` | Checkout inspection, fast-forward updates, and service restart sequencing |
+| `fleet.py` | Checkout inspection and central deployment CLI client |
 | `ai_tools.py` | CLI version inspection and configured npm updates |
 | `command_output.py` | Async command execution and failure recognition |
 | `shell.py` | Subprocess execution using argument lists |
@@ -35,12 +35,13 @@ Every command checks the owner chat before reading data or invoking operations.
 Service names are resolved against `MANAGED_SERVICES`; target aliases resolve
 only to configured agent/tool records. Subprocesses receive argument lists.
 
-`/ai_update` fast-forwards selected checkouts and initializes their submodules
-recursively before reading the final revision. A failed submodule update stops
-the operation without restarting a service. An unchanged checkout does not
-restart. Changed non-self agents restart immediately. A changed ops agent defers
-its own restart until after the result has been sent, then requests a nonblocking
-restart. A failed pull or unreadable revision never triggers a restart.
+`/ai_update` queues one target or an entire sequential fleet batch through
+`ai-deploy submit deploy`. `/rollback` queues exactly one fixed target;
+`/deployments` reads persisted current and previous verified releases. The bot
+never schedules a second self restart: an independent deployment job owns
+installation, verification, restart, and recovery. Missing or failed manager
+calls are reported, without falling back to bare Git updates.
+
 
 Package reports retain the security/stable/review categories, HTML escaping,
 section limits, and fallback when rich messages are unavailable. Their summary
@@ -59,5 +60,5 @@ which the fleet service converts into its existing result dictionary.
 CI runs Ruff lint, formatting, type-hint/docstring checks, and pytest. Regression
 tests cover command registration, owner rejection, service allowlists, package
 classification, resource parsing, metadata selection, update failures, and
-self-restart ordering. System commands, package managers, network requests, and
+supervised deployment submission. System commands, package managers, network requests, and
 service restarts are mocked in the operation tests.

@@ -2,7 +2,6 @@
 
 import os
 import unittest
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +9,6 @@ os.environ.setdefault("OPS_TELEGRAM_BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("YOUR_CHAT_ID", "123")
 
 from ai_ops_agent import config
-from ai_ops_agent.fleet import update_agent
 from ai_ops_agent.telegram_bot import (
     BOT_COMMANDS,
     build_application,
@@ -56,28 +54,6 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
         message.reply_text.assert_awaited_once_with(
             "ai-ops-agent v1\nbranch: main\ncommit: abc123\ncore: v1.1"
         )
-
-    async def test_agent_update_syncs_submodules_after_pull(self) -> None:
-        with TemporaryDirectory() as temporary_dir:
-            run = AsyncMock(side_effect=["abc123", "Already up to date.", "", "abc123"])
-            agent = {
-                "name": "ai-pm-agent",
-                "path": temporary_dir,
-                "service": "ai-pm-agent",
-            }
-
-            with patch("ai_ops_agent.fleet.run_command", run):
-                result = await update_agent(
-                    agent,
-                    defer_self_restart=False,
-                )
-
-        submodule_call = run.await_args_list[2]
-        self.assertEqual(
-            submodule_call.args[0][-4:],
-            ["submodule", "update", "--init", "--recursive"],
-        )
-        self.assertEqual(result["status"], "already current")
 
     def test_catalog_matches_registered_command_handlers(self) -> None:
         application = build_application()

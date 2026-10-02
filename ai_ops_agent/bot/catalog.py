@@ -19,7 +19,9 @@ COMMANDS = build_command_list(
         Command("core", "Show the shared core version"),
         Command("my_agents", "Show installed AI agents"),
         Command("ai_tools", "Show or update installed AI tools"),
-        Command("ai_update", "Update installed AI agents"),
+        Command("ai_update", "Queue safe deployments of installed agents"),
+        Command("deployments", "Show current and previous deployments"),
+        Command("rollback", "Restore a previous verified deployment"),
     ]
 )
 BOT_COMMANDS = tuple(to_bot_commands(COMMANDS))

@@ -30,6 +30,8 @@ from ai_ops_agent.bot import agents, packages, services
         "my_agents",
         "ai_tools",
         "ai_update",
+        "deployments",
+        "rollback",
     ],
 )
 def test_unauthorized_commands_do_not_run_or_reply(name, chat, monkeypatch):
@@ -102,38 +104,35 @@ def test_upgrade_timeout_is_reported_as_failure(chat, monkeypatch):
     assert "Upgrade failed" in chat.message.reply_text.await_args.args[0]
 
 
-def test_self_update_reports_results_before_queuing_restart(chat, monkeypatch):
-    events = []
-
-    async def record_reply(text, **kwargs):
-        events.append(text)
-
-    async def record_restart(service, **kwargs):
-        events.append((service, kwargs))
-
-    chat.message.reply_text.side_effect = record_reply
-    monkeypatch.setattr(
-        agents, "resolve_ai_agents", lambda args: [{"name": "ai-ops-agent"}]
+def test_self_update_only_queues_manager_operation(chat, monkeypatch):
+    command = AsyncMock(
+        return_value={
+            "name": "ai-ops-agent",
+            "status": "queued",
+            "detail": "operation: op1",
+            "restart": "managed",
+        }
     )
-    monkeypatch.setattr(
-        agents,
-        "update_agent",
-        AsyncMock(
-            return_value={
-                "name": "ai-ops-agent",
-                "status": "updated",
-                "detail": "old → new",
-                "restart": "deferred until after report",
-            }
-        ),
-    )
-    monkeypatch.setattr(agents, "self_service", lambda: "ai-ops-agent")
-    monkeypatch.setattr(agents, "restart_agent_service", record_restart)
-
+    monkeypatch.setattr(agents, "update_agent", command)
     asyncio.run(agents.ai_update(chat, SimpleNamespace(args=["ops"])))
+    command.assert_awaited_once()
+    assert "op1" in chat.message.reply_text.await_args.args[0]
 
-    assert "old → new" in events[-2]
-    assert events[-1] == ("ai-ops-agent", {"no_block": True})
+
+@pytest.mark.parametrize("args", [[], ["all"], ["pm", "ops"], ["pm;reboot"]])
+def test_rollback_requires_one_fixed_target(chat, monkeypatch, args):
+    command = AsyncMock()
+    monkeypatch.setattr(agents, "rollback_agent", command)
+    asyncio.run(agents.rollback(chat, SimpleNamespace(args=args)))
+    command.assert_not_awaited()
+
+
+def test_rollback_reports_queued_operation(chat, monkeypatch):
+    command = AsyncMock(return_value={"operation": "op2", "status": "queued"})
+    monkeypatch.setattr(agents, "rollback_agent", command)
+    asyncio.run(agents.rollback(chat, SimpleNamespace(args=["pm"])))
+    command.assert_awaited_once_with("pm")
+    assert "op2" in chat.message.reply_text.await_args.args[0]
 
 
 @pytest.mark.parametrize(
@@ -147,3 +146,50 @@ def test_unknown_agent_or_tool_does_not_start_updates(name, args, chat, monkeypa
     agent_update.assert_not_awaited()
     tool_update.assert_not_awaited()
     assert "Unknown AI" in chat.message.reply_text.await_args.args[0]
+
+
+def test_fleet_update_submits_one_batch(chat, monkeypatch):
+    command = AsyncMock(
+        return_value={
+            "name": "all",
+            "status": "queued",
+            "detail": "batch1",
+            "restart": "managed",
+        }
+    )
+    monkeypatch.setattr(agents, "update_agent", command)
+    asyncio.run(agents.ai_update(chat, SimpleNamespace(args=["all"])))
+    command.assert_awaited_once_with({"name": "all"}, defer_self_restart=True)
+
+
+def test_deployments_escape_revision_and_failure_text(chat, monkeypatch):
+    monkeypatch.setattr(
+        agents,
+        "deployment_status",
+        AsyncMock(
+            return_value=[
+                {
+                    "name": "pm",
+                    "status": "failed",
+                    "current": {"commit": "<abc>"},
+                    "previous": {"commit": "good", "version": "v1"},
+                    "error": "<failure>",
+                }
+            ]
+        ),
+    )
+    asyncio.run(agents.deployments(chat, SimpleNamespace(args=[])))
+    text = chat.message.reply_text.await_args.args[0]
+    assert "&lt;abc&gt;" in text
+    assert "&lt;failure&gt;" in text
+    assert "good" in text
+
+
+def test_unavailable_deployment_manager_is_reported(chat, monkeypatch):
+    monkeypatch.setattr(
+        agents,
+        "deployment_status",
+        AsyncMock(side_effect=agents.DeploymentError("not installed")),
+    )
+    asyncio.run(agents.deployments(chat, SimpleNamespace(args=[])))
+    assert "unavailable: not installed" in chat.message.reply_text.await_args.args[0]

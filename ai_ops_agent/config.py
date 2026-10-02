@@ -87,4 +87,10 @@ AI_AGENT_INSTALLS = [
         "service": os.environ.get("AI_OPS_AGENT_SERVICE", "ai-ops-agent"),
         "env_file": os.environ.get("AI_OPS_AGENT_ENV", "/etc/ai-ops-agent.env"),
     },
+    {
+        "name": "ai-dashboard",
+        "aliases": ("dashboard",),
+        "path": os.environ.get("AI_DASHBOARD_DIR", "/opt/ai-dashboard"),
+        "service": "ai-dashboard",
+    },
 ]

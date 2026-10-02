@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 from ai_ops_agent.command_output import command_failed, run_command, strip_exit_prefix
@@ -132,78 +132,83 @@ async def restart_agent_service(
     return f"restarted, state: {state}"
 
 
-async def update_agent(agent: dict, *, defer_self_restart: bool) -> dict[str, str]:
-    """Fast-forward an agent checkout and coordinate its service restart."""
-    path = Path(agent["path"])
+DEPLOY_COMMAND = "/usr/local/sbin/ai-deploy"
+DEPLOY_TARGETS = {
+    "ai-coding-agent": "coding",
+    "ai-pm-agent": "pm",
+    "ai-ops-agent": "ops",
+    "ai-dashboard": "dashboard",
+}
+
+
+async def deployment_request(arguments: list[str]) -> dict:
+    """Call the fixed deployment CLI and reject failed or malformed responses."""
+    output = await run_command([DEPLOY_COMMAND, *arguments], timeout=30)
+    if command_failed(output):
+        raise DeploymentError(output)
+    try:
+        result = json.loads(output)
+    except (ValueError, TypeError) as error:
+        raise DeploymentError("Deployment manager returned invalid JSON") from error
+    if not isinstance(result, dict) or result.get("error"):
+        raise DeploymentError(
+            str(result.get("error", "Invalid response"))
+            if isinstance(result, dict)
+            else "Invalid response"
+        )
+    return result
+
+
+class DeploymentError(RuntimeError):
+    """The deployment manager could not satisfy the request."""
+
+
+async def deployment_status() -> list[dict]:
+    """Read persisted deployment status for the fixed fleet."""
+    result = await deployment_request(["status"])
+    targets = result.get("targets")
+    if not isinstance(targets, list) or not all(isinstance(t, dict) for t in targets):
+        raise DeploymentError("Deployment manager returned invalid targets")
+    return targets
+
+
+async def rollback_agent(target: str) -> dict:
+    """Queue rollback of exactly one fixed deployment target."""
+    if target not in DEPLOY_TARGETS.values():
+        raise DeploymentError("Unknown deployment target")
+    result = await deployment_request(["submit", "rollback", target])
+    if result.get("status") != "queued" or not result.get("operation"):
+        raise DeploymentError("Deployment manager did not queue the operation")
+    return result
+
+
+async def update_agent(
+    agent: dict, *, defer_self_restart: bool = True
+) -> dict[str, str]:
+    """Queue a supervised deployment, including self updates, outside this bot."""
     name = agent["name"]
-    service = agent.get("service") or ""
-    if not path.exists():
+    target = "all" if name == "all" else DEPLOY_TARGETS.get(name)
+    if target is None:
         return {
             "name": name,
-            "status": "skipped",
-            "detail": f"not installed at {path}",
+            "status": "failed",
+            "detail": "Unknown target",
             "restart": "not run",
         }
-
     try:
-        checkout = await _fast_forward(path)
-    except AgentUpdateError as error:
+        result = await deployment_request(["submit", "deploy", target, "main"])
+        if result.get("status") != "queued" or not result.get("operation"):
+            raise DeploymentError("Deployment manager did not queue the operation")
+    except DeploymentError as error:
         return {
             "name": name,
             "status": "failed",
             "detail": str(error),
             "restart": "not run",
         }
-    before, after = checkout.before, checkout.after
-    changed = after != before
-    status = "updated" if changed else "already current"
-    detail = f"{before} → {after}" if changed else before
-
-    if not changed:
-        restart = "not needed"
-    elif name == "ai-ops-agent" and defer_self_restart:
-        restart = "deferred until after report"
-    else:
-        restart = await restart_agent_service(service)
-
     return {
         "name": name,
-        "status": status,
-        "detail": detail,
-        "restart": restart,
+        "status": str(result.get("status", "unknown")),
+        "detail": f"operation: {result.get('operation', 'unknown')}",
+        "restart": "managed by deployment job",
     }
-
-
-class AgentUpdateError(RuntimeError):
-    """An agent checkout could not be read or fast-forwarded."""
-
-
-@dataclass(frozen=True)
-class _CheckoutUpdate:
-    """Capture revisions on either side of a successful fast-forward."""
-
-    before: str
-    after: str
-
-
-async def _fast_forward(path: Path) -> _CheckoutUpdate:
-    """Fast-forward a checkout and return its verified before and after commits."""
-    command = ["git", "-C", str(path), "rev-parse", "--short", "HEAD"]
-    before = await run_command(command)
-    if command_failed(before) or not before:
-        raise AgentUpdateError(f"cannot read current commit: {before}")
-    output = await run_command(
-        ["git", "-C", str(path), "pull", "--ff-only"], timeout=180
-    )
-    if command_failed(output):
-        raise AgentUpdateError(output)
-    submodules = await run_command(
-        ["git", "-C", str(path), "submodule", "update", "--init", "--recursive"],
-        timeout=180,
-    )
-    if command_failed(submodules):
-        raise AgentUpdateError(f"submodule sync failed: {submodules}")
-    after = await run_command(command)
-    if command_failed(after) or not after:
-        raise AgentUpdateError(f"cannot read updated commit: {after}")
-    return _CheckoutUpdate(before, after)

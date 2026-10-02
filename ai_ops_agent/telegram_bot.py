@@ -7,7 +7,13 @@ import logging
 from telegram.ext import Application, CommandHandler
 
 from ai_ops_agent import config
-from ai_ops_agent.bot.agents import ai_tools, ai_update, my_agents
+from ai_ops_agent.bot.agents import (
+    ai_tools,
+    ai_update,
+    deployments,
+    my_agents,
+    rollback,
+)
 from ai_ops_agent.bot.catalog import BOT_COMMANDS
 from ai_ops_agent.bot.help import core, start, version
 from ai_ops_agent.bot.packages import update_cmd, upgrade
@@ -49,4 +55,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("my_agents", my_agents))
     app.add_handler(CommandHandler("ai_tools", ai_tools))
     app.add_handler(CommandHandler("ai_update", ai_update))
+    app.add_handler(CommandHandler("deployments", deployments))
+    app.add_handler(CommandHandler("rollback", rollback))
     return app

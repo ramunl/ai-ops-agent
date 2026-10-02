@@ -11,12 +11,18 @@ from telegram.ext import ContextTypes
 from ai_ops_agent import config
 from ai_ops_agent.ai_tools import inspect_tool, update_tool
 from ai_ops_agent.bot.transport import is_authorized, reply, reply_html
-from ai_ops_agent.fleet import inspect_agent, restart_agent_service, update_agent
+from ai_ops_agent.fleet import (
+    DEPLOY_TARGETS,
+    DeploymentError,
+    deployment_status,
+    inspect_agent,
+    rollback_agent,
+    update_agent,
+)
 from ai_ops_agent.inventory import (
     agent_names,
     resolve_ai_agents,
     resolve_ai_systems,
-    self_service,
     tool_names,
 )
 
@@ -74,11 +80,20 @@ async def my_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agents = await asyncio.gather(
         *(inspect_agent(agent) for agent in config.AI_AGENT_INSTALLS)
     )
+    try:
+        deployed = {entry["name"]: entry for entry in await deployment_status()}
+    except DeploymentError:
+        deployed = {}
     lines = ["🤖 <b>AI agents</b>", ""]
     for idx, agent in enumerate(agents):
         if idx:
             lines.append("")
         lines.extend(_format_ai_agent_info(agent))
+        entry = deployed.get(agent["name"]) or deployed.get(
+            DEPLOY_TARGETS.get(agent["name"])
+        )
+        if entry:
+            lines.extend(_deployment_lines(entry))
     await reply_html(update, "\n".join(lines))
 
 
@@ -126,10 +141,13 @@ async def ai_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def ai_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Update selected agents and report results before restarting this bot."""
+    """Queue selected deployments without restarting the bot process itself."""
     if not is_authorized(update):
         return
-    agents = resolve_ai_agents(context.args)
+    if len(context.args) > 1:
+        await reply(update, "Usage: /ai_update [coding|pm|ops|dashboard|all]")
+        return
+    agents = resolve_ai_agents([] if context.args == ["all"] else context.args)
     if agents is None:
         await reply(
             update,
@@ -140,30 +158,63 @@ async def ai_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     target = "all AI agents" if not context.args else agents[0]["name"]
     await reply(update, f"⬇️ Updating {target}...")
     results = []
-    restart_self = False
+    if len(agents) > 1:
+        agents = [{"name": "all"}]
     for agent in agents:
         result = await update_agent(agent, defer_self_restart=True)
         results.append(result)
-        if (
-            agent["name"] == "ai-ops-agent"
-            and result["restart"] == "deferred until after report"
-        ):
-            restart_self = True
 
     lines = ["🤖 <b>AI update</b>", ""]
     for idx, result in enumerate(results):
         if idx:
             lines.append("")
         lines.extend(_format_ai_update_result(result))
-    if restart_self:
-        lines += [
-            "",
-            "<i>ai-ops-agent changed; restarting this bot after this report.</i>",
-        ]
     await reply_html(update, "\n".join(lines))
 
-    if restart_self:
-        await restart_agent_service(
-            self_service(),
-            no_block=True,
+
+def _deployment_lines(entry: dict) -> list[str]:
+    lines = [f"deployment: {html.escape(str(entry.get('status', 'unknown')))}"]
+    for key in ("current", "previous"):
+        revision = entry.get(key) or {}
+        lines.append(
+            f"{key}: <code>{html.escape(str(revision.get('commit', 'none')))}</code> "
+            f"{html.escape(str(revision.get('version', '')))}"
         )
+    if entry.get("error"):
+        lines.append(f"error: {html.escape(str(entry['error']))}")
+    return lines
+
+
+async def deployments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report current and previously verified deployments to the owner."""
+    if not is_authorized(update):
+        return
+    try:
+        targets = await deployment_status()
+    except DeploymentError as error:
+        await reply(update, f"Deployment status unavailable: {error}")
+        return
+    lines = ["<b>Deployments</b>"]
+    for entry in targets:
+        lines.append(f"\n<b>{html.escape(str(entry.get('name', 'unknown')))}</b>")
+        lines.extend(_deployment_lines(entry))
+    await reply_html(update, "\n".join(lines))
+
+
+async def rollback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Queue rollback of one allowlisted target to its previous verified release."""
+    if not is_authorized(update):
+        return
+    if len(context.args) != 1 or context.args[0] not in DEPLOY_TARGETS.values():
+        await reply(update, "Usage: /rollback <coding|pm|ops|dashboard>")
+        return
+    try:
+        result = await rollback_agent(context.args[0])
+    except DeploymentError as error:
+        await reply(update, f"Rollback failed: {error}")
+        return
+    await reply(
+        update,
+        f"Rollback queued: {result.get('operation', 'unknown')}. "
+        "Use /deployments to check the result.",
+    )
