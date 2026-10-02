@@ -155,12 +155,14 @@ class System:
             try:
                 pid = self.process(target)
                 if old_pid is None or pid != old_pid:
+                    self.application_health(target)
                     break
             except DeploymentError:
                 pass
             if time.monotonic() >= deadline:
                 raise DeploymentError(
-                    "Service did not start a fresh process within 30s"
+                    "Service did not start a healthy fresh process within 30s; "
+                    "application health unavailable"
                 )
             time.sleep(1)
         if old_pid is not None and pid == old_pid:
@@ -169,18 +171,21 @@ class System:
             time.sleep(1)
             if self.process(target) != pid:
                 raise DeploymentError("Service is restarting repeatedly")
-            if target.health_url:
-                try:
-                    with urllib.request.urlopen(
-                        target.health_url, timeout=3
-                    ) as response:
-                        health = json.load(response)
-                    if health.get("ok") is not True:
-                        raise ValueError("Unhealthy application")
-                except (OSError, ValueError, urllib.error.URLError) as error:
-                    raise DeploymentError(
-                        "Dashboard application health check failed"
-                    ) from error
+            self.application_health(target)
+
+    def application_health(self, target: Target) -> None:
+        """Check application readiness separately from a running process."""
+        if not target.health_url:
+            return
+        try:
+            with urllib.request.urlopen(target.health_url, timeout=3) as response:
+                health = json.load(response)
+            if not isinstance(health, dict) or health.get("ok") is not True:
+                raise ValueError("Unhealthy application")
+        except (OSError, ValueError, urllib.error.URLError) as error:
+            raise DeploymentError(
+                "Dashboard application health check failed"
+            ) from error
 
     def restart(self, target: Target) -> None:
         """Restart and verify a new stable process."""
