@@ -153,3 +153,37 @@ python -m pytest -q
 Run `ruff format ai_ops_agent tests` before committing. CI uses Python 3.12 and
 runs these checks on pull requests and pushes to `main`. Command timeouts are
 reported as failures, including package upgrades and agent checkout updates.
+
+## Disk cleanup (`ai-cleanup`)
+
+`ai_ops_agent/cleanup.py`, installed as `/usr/local/sbin/ai-cleanup`, measures and
+reclaims disk space. The dashboard's Ops window calls it, and an ops-bot command
+can call the same code.
+
+```bash
+ai-cleanup report   # measure only; changes nothing
+ai-cleanup run      # clean; one run at a time
+```
+
+Both print one JSON document. The cleanups are fixed; callers choose only the
+mode, so no command or path ever comes from a caller:
+
+| Cleanup | What it does |
+|---|---|
+| Unused packages and apt cache | `apt-get autoremove --purge -y` (old kernels included), `apt-get clean` |
+| Old system logs | `journalctl --vacuum-time=7d --vacuum-size=200M` |
+| Old snap revisions | removes revisions marked `disabled` in `snap list --all` |
+| pip and npm caches | deletes `/root/.cache/pip` and `/root/.npm/_cacache` |
+
+Freed space is measured before and after each step. Runs are logged to
+`/var/log/ai-cleanup.log`. `report` also lists the largest directories (two
+levels deep, innermost only), which is where to look when the disk grows for
+another reason.
+
+It uses only the Python standard library and runs with the system `python3`, so
+it needs neither the bot's virtualenv nor its credentials. Install once (the
+wrapper loads the code from `/opt/ai-ops-agent`, so later deploys update it):
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-cleanup /usr/local/sbin/ai-cleanup
+```
