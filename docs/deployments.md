@@ -7,17 +7,20 @@ systemd service completes them even when the requesting bot restarts.
 
 ## One-time migration
 
-Review the coordinated Ops, coding-agent, and dashboard PRs. Stage the reviewed
-Ops branch in a temporary clone, so installing the manager does not change a
-live bot checkout:
+Merging or deploying the Ops repository does not install the manager. It is an
+independent server component and needs the installer below once. Otherwise,
+the new coding bot reports "Deployment manager is not installed".
+
+After the coordinated PRs are merged, stage main in a temporary clone so
+installation does not change a live bot checkout:
 
 ```bash
-git clone --branch feature/safe-deployments https://github.com/ramunl/ai-ops-agent.git /tmp/ai-deploy-install
+git clone --branch main https://github.com/ramunl/ai-ops-agent.git /tmp/ai-deploy-install
 sudo bash /tmp/ai-deploy-install/deploy/install-ai-deploy
 sudo ai-deploy status
 ```
 
-Then merge the coordinated PRs and bootstrap the new code manually:
+Then bootstrap the deployed services manually:
 
 ```bash
 sudo ai-deploy submit deploy all main
@@ -141,9 +144,26 @@ failed request result, with a verified restored current version.
 `deploy/install-ai-deploy` copies a deliberate manager release independently
 to `/usr/local/lib/ai-deploy/releases` and atomically selects `current`.
 Rolling back the Ops checkout cannot remove or downgrade the running manager.
-Re-run this installer deliberately to upgrade the manager; keep the prior
-manager release available for administrative recovery. Do not run the
-installer while a transaction is queued or running (it refuses both).
+An ordinary Ops deployment updates `/opt/ai-ops-agent` but deliberately does
+not replace this independent manager. After a manager fix is merged, install
+its new release explicitly from a fresh temporary checkout:
+
+```bash
+git clone --branch main https://github.com/ramunl/ai-ops-agent.git /tmp/ai-deploy-upgrade
+sudo bash /tmp/ai-deploy-upgrade/deploy/install-ai-deploy
+sudo ai-deploy status
+```
+
+Use a new temporary directory if that name already exists. Existing deployment
+state and rollback bundles are preserved. Keep the prior manager release for
+administrative recovery. Do not run the installer while a transaction is queued
+or running (it refuses both).
+
+The startup-health fix in PR #6 waits up to 30 seconds for the dashboard HTTP
+listener, then verifies ten seconds of stable health. Earlier manager code
+could reject a normal startup immediately and restore the previous dashboard.
+The fixed manager is already installed on the production server; merge #6
+before using main to install it on another server.
 
 The installer owns `/usr/local/sbin/ai-deploy` and all four `update-TARGET`
 compatibility scripts. These wrappers are independent of managed artifact
