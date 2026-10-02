@@ -32,7 +32,9 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /my_agents | Installed AI agents, versions, git refs, service states, configured models, and latest status |
 | /ai_tools | Installed AI tools, versions, configured models, and update status |
 | /ai_tools update <codex\|claude\|all> | Update installed AI tools |
-| /ai_update [agent] | Update all AI agents by default, or one agent by name/alias |
+| /ai_update [agent] | Queue safe deployment of all targets, or one by name/alias |
+| /deployments | Current and previous verified releases and operation status |
+| /rollback <coding\|pm\|ops\|dashboard> | Queue rollback of one target to its previous verified release |
 
 Only whitelisted services can be managed (see `config.py`), and only the authorized chat ID can issue commands.
 
@@ -187,3 +189,14 @@ wrapper loads the code from `/opt/ai-ops-agent`, so later deploys update it):
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-cleanup /usr/local/sbin/ai-cleanup
 ```
+
+### Verified deployments and rollback
+
+Install the independent deployment manager once before enabling deployment
+controls: `sudo bash /opt/ai-ops-agent/deploy/install-ai-deploy`. Thereafter,
+`ai-deploy submit deploy TARGET main` queues a verified deployment and
+`ai-deploy submit rollback TARGET` restores its previous verified version.
+Required PM/Ops bridges and versioned units are installed automatically.
+See [deployment migration, safety checks, and recovery](docs/deployments.md)
+for the installation order, fixed server paths, dependency snapshots,
+compatibility updaters, and interrupted-job recovery.

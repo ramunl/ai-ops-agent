@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Deliberate manager upgrades are independent of managed checkout rollbacks.
+set -euo pipefail
+SOURCE="$(cd "$(dirname "$0")/.." && pwd)"
+install -d -m 700 /var/lib/ai-deploy
+exec 9>/var/lib/ai-deploy/lock
+flock -n 9 || { echo 'Deployment transaction is running' >&2; exit 1; }
+python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path('/var/lib/ai-deploy/state.json')
+if path.exists() and json.loads(path.read_text()).get('active'):
+    raise SystemExit('Queued deployment must finish or be recovered before manager upgrade')
+PY
+REVISION="$(git -C "$SOURCE" rev-parse HEAD)-$(date +%s)"
+DESTINATION="/usr/local/lib/ai-deploy/releases/$REVISION"
+install -d -m 755 "$DESTINATION/ai_ops_agent"
+install -m 644 "$SOURCE/ai_ops_agent/__init__.py" "$DESTINATION/ai_ops_agent/__init__.py"
+cp -r "$SOURCE/ai_ops_agent/deployment" "$DESTINATION/ai_ops_agent/"
+find "$DESTINATION" -type d -name __pycache__ -exec rm -rf '{}' +
+chmod -R go-w "$DESTINATION"
+ln -s "$DESTINATION" /usr/local/lib/ai-deploy/current.new
+mv -Tf /usr/local/lib/ai-deploy/current.new /usr/local/lib/ai-deploy/current
+install -m 755 "$SOURCE/deploy/ai-deploy" /usr/local/sbin/ai-deploy
+for TARGET in ai-coding-agent ai-pm-agent ai-ops-agent ai-dashboard; do
+    install -m 755 "$SOURCE/deploy/update-managed-agent" "/usr/local/sbin/update-$TARGET"
+done
+echo 'Deployment manager installed; run ai-deploy status, then submit deploy TARGET main'

@@ -1,0 +1,9 @@
+#!/usr/bin/python3
+"""Run the independent, credential-free deployment manager."""
+
+import sys
+
+sys.path.insert(0, "/usr/local/lib/ai-deploy/current")
+from ai_ops_agent.deployment.cli import main
+
+sys.exit(main())
