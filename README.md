@@ -211,6 +211,8 @@ bot's `/restart` and `/logs` use too.
 ```bash
 ai-service list                 # {"ok": true, "services": [...]}
 ai-service restart ai-pm-agent  # queued with systemctl --no-block
+ai-service reboot               # queued; refused while an upgrade, cleanup,
+                                # tool update or deployment is running
 ```
 
 The restart is queued so a caller can answer before it goes down (the dashboard
@@ -262,3 +264,6 @@ Standard library only, no bot credentials. Install once:
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-tools /usr/local/sbin/ai-tools
 ```
+
+Reboots use a five-second systemd timer to let the dashboard answer first.
+The guard also checks queued deployments and detached package upgrades.

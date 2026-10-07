@@ -1,5 +1,5 @@
 #!/bin/sh
-# ai-service list|restart <service>: whitelisted service control (JSON output).
+# ai-service list|restart <service>|reboot: whitelisted service control (JSON output).
 # Installed as /usr/local/sbin/ai-service; the logic is
 # ai_ops_agent/service_control.py, run with the system python3 (standard
 # library only, no bot credentials).
