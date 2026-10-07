@@ -243,3 +243,22 @@ credentials. Install once:
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-packages /usr/local/sbin/ai-packages
 ```
+
+## AI tool updates (`ai-tools`)
+
+`ai_ops_agent/tool_updates.py`, installed as `/usr/local/sbin/ai-tools`, does
+what the bot's `/ai_tools` does for the dashboard, from the single list in
+`tools_list.py` (`codex`, `claude`).
+
+```bash
+ai-tools check           # installed and published version of each tool
+ai-tools update claude   # npm install -g <its package>@latest
+```
+
+Only listed tool names are accepted: no package names or npm options can be
+passed. One update at a time; updates are logged to `/var/log/ai-tools.log`.
+Standard library only, no bot credentials. Install once:
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-tools /usr/local/sbin/ai-tools
+```

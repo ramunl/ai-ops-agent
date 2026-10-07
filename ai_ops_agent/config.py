@@ -23,6 +23,7 @@ except ValueError:
 # arbitrary service names from user input. Defined once, shared with the
 # dashboard's ai-service command.
 from ai_ops_agent.services_list import MANAGED_SERVICES  # noqa: E402
+from ai_ops_agent.tools_list import AI_TOOLS  # noqa: E402
 
 # Default service for /logs when none is given.
 DEFAULT_SERVICE = "ai-coding-agent"
@@ -39,9 +40,9 @@ AI_SYSTEM_INSTALLS = [
     {
         "name": "codex",
         "aliases": ("openai", "openai-codex"),
-        "version_cmd": ("codex", "--version"),
+        "version_cmd": AI_TOOLS["codex"].version_cmd,
         "package_manager": "npm",
-        "package": os.environ.get("AI_CODEX_NPM_PACKAGE", "@openai/codex"),
+        "package": AI_TOOLS["codex"].package,
         "model_env_keys": ("CODEX_MODEL", "OPENAI_MODEL", "AI_MODEL", "MODEL"),
         "env_file": os.environ.get(
             "AI_CODEX_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
@@ -50,12 +51,9 @@ AI_SYSTEM_INSTALLS = [
     {
         "name": "claude",
         "aliases": ("claude-code", "anthropic"),
-        "version_cmd": ("claude", "--version"),
+        "version_cmd": AI_TOOLS["claude"].version_cmd,
         "package_manager": "npm",
-        "package": os.environ.get(
-            "AI_CLAUDE_NPM_PACKAGE",
-            "@anthropic-ai/claude-code",
-        ),
+        "package": AI_TOOLS["claude"].package,
         "model_env_keys": ("CLAUDE_MODEL", "ANTHROPIC_MODEL", "AI_MODEL", "MODEL"),
         "env_file": os.environ.get(
             "AI_CLAUDE_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
