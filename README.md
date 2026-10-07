@@ -200,3 +200,23 @@ Required PM/Ops bridges and versioned units are installed automatically.
 See [deployment migration, safety checks, and recovery](docs/deployments.md)
 for the installation order, fixed server paths, dependency snapshots,
 compatibility updaters, and interrupted-job recovery.
+
+## Service restarts (`ai-service`)
+
+`ai_ops_agent/service_control.py`, installed as `/usr/local/sbin/ai-service`,
+restarts one service from the single whitelist in `services_list.py`
+(`ai-coding-agent`, `ai-pm-agent`, `ai-ops-agent`, `ai-dashboard`), which the
+bot's `/restart` and `/logs` use too.
+
+```bash
+ai-service list                 # {"ok": true, "services": [...]}
+ai-service restart ai-pm-agent  # queued with systemctl --no-block
+```
+
+The restart is queued so a caller can answer before it goes down (the dashboard
+restarting itself). Runs are logged to `/var/log/ai-service.log`. Standard
+library only, no bot credentials. Install once:
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-service /usr/local/sbin/ai-service
+```

@@ -19,9 +19,10 @@ try:
 except ValueError:
     sys.exit(f"ERROR: YOUR_CHAT_ID must be an integer, got: {_chat_id_raw!r}")
 
-# Services this bot is allowed to manage. Whitelist only —
-# never allow arbitrary service names from user input.
-MANAGED_SERVICES = ["ai-coding-agent", "ai-ops-agent"]
+# Services this bot is allowed to manage. Whitelist only — never allow
+# arbitrary service names from user input. Defined once, shared with the
+# dashboard's ai-service command.
+from ai_ops_agent.services_list import MANAGED_SERVICES  # noqa: E402
 
 # Default service for /logs when none is given.
 DEFAULT_SERVICE = "ai-coding-agent"
