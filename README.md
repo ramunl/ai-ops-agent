@@ -220,3 +220,26 @@ library only, no bot credentials. Install once:
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-service /usr/local/sbin/ai-service
 ```
+
+## Package updates (`ai-packages`)
+
+`ai_ops_agent/package_updates.py`, installed as `/usr/local/sbin/ai-packages`,
+runs the same commands as the bot's `/update` and `/upgrade` for the dashboard.
+
+```bash
+ai-packages check     # apt-get update, then what can be upgraded, by kind
+ai-packages upgrade   # apt-get upgrade -y, keeping installed config files
+```
+
+The mode is the only argument: no package names or apt options can be passed.
+It never removes packages (`upgrade`, not `full-upgrade`). The upgrade runs in
+its own systemd unit (`systemd-run --wait`), so restarting the dashboard
+mid-run cannot interrupt dpkg. Upgrade output goes to the system journal,
+not a pipe owned by the caller. The fixed `ai-packages-upgrade` unit refuses
+a second upgrade while the first is still running. One run at a time;
+runs are logged to `/var/log/ai-packages.log`. Standard library only, no bot
+credentials. Install once:
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-packages /usr/local/sbin/ai-packages
+```

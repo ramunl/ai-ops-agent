@@ -1,0 +1,11 @@
+#!/bin/sh
+# ai-packages check|upgrade: system package updates (JSON output).
+# Installed as /usr/local/sbin/ai-packages; the logic is ai_ops_agent/package_updates.py,
+# run with the system python3 (standard library only, no bot credentials).
+APP_DIR="${AI_OPS_AGENT_DIR:-/opt/ai-ops-agent}"
+exec /usr/bin/env python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from ai_ops_agent.package_updates import main
+sys.exit(main(sys.argv[2:]))
+' "$APP_DIR" "$@"
