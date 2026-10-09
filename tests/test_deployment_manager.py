@@ -439,3 +439,27 @@ def test_dashboard_waits_for_http_readiness_before_stability(monkeypatch, tmp_pa
     system.healthy(target, old_pid=8)
     assert len(attempts) == 13
     assert sleeps == [1] * 12
+
+
+def test_remote_main_reports_origin_main_without_changing_anything(manager):
+    target = manager.fleet["test-agent"]
+    before = git(target.repo, "rev-parse", "HEAD")
+    result = manager.remote_main()
+    origin_main = git(target.repo, "ls-remote", "origin", "refs/heads/main").split()[0]
+    assert result == {
+        "targets": [{"name": "test-agent", "main": origin_main, "error": None}]
+    }
+    assert git(target.repo, "rev-parse", "HEAD") == before
+    assert all(
+        command[3] == "ls-remote"
+        for command in manager.system.commands
+        if command[0] == "git"
+    )
+
+
+def test_remote_main_reports_an_unreachable_origin(manager):
+    target = manager.fleet["test-agent"]
+    git(target.repo, "remote", "set-url", "origin", str(target.repo.parent / "missing"))
+    result = manager.remote_main()["targets"][0]
+    assert result["main"] is None
+    assert result["error"]

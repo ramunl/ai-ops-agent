@@ -42,6 +42,24 @@ class Manager:
             results.append(record)
         return {"targets": results, "active": state.get("active")}
 
+    def remote_main(self) -> dict:
+        """The commit main points to on each target's origin (read-only).
+
+        Lets a caller tell whether "deploy latest main" would change anything.
+        A target whose remote cannot be reached reports an error, not a guess.
+        """
+        results = []
+        for name, target in self.fleet.items():
+            try:
+                output = self.system.git(
+                    target, "ls-remote", "origin", "refs/heads/main"
+                )
+                commit = output.split()[0] if output.strip() else None
+                results.append({"name": name, "main": commit, "error": None})
+            except DeploymentError as error:
+                results.append({"name": name, "main": None, "error": str(error)})
+        return {"targets": results}
+
     def reserve(
         self, action: str, name: str, ref: str | None, expected: str | None = None
     ) -> dict:

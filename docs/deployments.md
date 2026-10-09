@@ -36,6 +36,12 @@ stops after a failed target; remaining targets are explicitly `not_run`.
 Successful earlier targets stay deployed. It is not an atomic whole-fleet
 rollback. Check `ai-deploy status` for completion before resubmitting.
 
+`ai-deploy remote` reports, read-only, the commit `main` points to on each
+target's origin (`git ls-remote`). The dashboard compares it with the deployed
+commit, so **Deploy latest main** is offered only when there is something new.
+The manager is a frozen copy, so after merging this, run `deploy/install-ai-deploy`
+again to pick it up.
+
 After a managed deployment, checkouts are detached: use `ai-deploy`, not
 `git pull`. The temporary installer clone can be removed after installation;
 the installed manager has its own copy of the implementation.

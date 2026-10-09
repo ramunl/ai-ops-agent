@@ -54,6 +54,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Verified fixed-fleet deployments")
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    sub.add_parser("remote")
     for command in ("submit", "deploy", "rollback"):
         child = sub.add_parser(command)
         if command == "submit":
@@ -111,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
         manager = Manager(Store(), targets(), System())
         if args.command == "status":
             result = manager.status()
+        elif args.command == "remote":
+            result = manager.remote_main()
         elif args.command == "execute":
             success = manager.execute(args.operation)
             print(json.dumps(manager.status()))
