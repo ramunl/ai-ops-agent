@@ -1,0 +1,9 @@
+#!/bin/sh
+# Read-only evidence for coding runs, with no caller-supplied paths or commands.
+APP_DIR="${AI_OPS_AGENT_DIR:-/opt/ai-ops-agent}"
+exec /usr/bin/env python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from ai_ops_agent.diagnostics import main
+sys.exit(main(sys.argv[2:]))
+' "$APP_DIR" "$@"

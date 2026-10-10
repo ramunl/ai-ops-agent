@@ -60,6 +60,9 @@ def targets() -> dict[str, Target]:
             artifacts.append(
                 ("deploy/ai-cleanup", Path("/usr/local/sbin/ai-cleanup"), 0o755)
             )
+            artifacts.append(
+                ("deploy/ai-diagnostics", Path("/usr/local/sbin/ai-diagnostics"), 0o755)
+            )
         result[name] = Target(
             name,
             Path("/opt") / name,

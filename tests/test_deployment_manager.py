@@ -249,6 +249,11 @@ def test_fixed_targets_include_service_units_and_required_bridges():
     }
     assert fleet["ai-pm-agent"].artifacts[0][0] == "ai-pm-agent.service"
     assert fleet["ai-ops-agent"].artifacts[0][0] == "ai-ops-agent.service"
+    assert (
+        "deploy/ai-diagnostics",
+        Path("/usr/local/sbin/ai-diagnostics"),
+        0o755,
+    ) in fleet["ai-ops-agent"].artifacts
     assert fleet["ai-pm-agent"].artifacts[1][1] == Path("/usr/local/sbin/ai-pm-todos")
     assert fleet["ai-dashboard"].health_url.endswith("/healthz")
 

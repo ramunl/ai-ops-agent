@@ -273,3 +273,21 @@ The guard also checks queued deployments and detached package upgrades.
 If `/update` or the dashboard's package check fails because the Caddy repository
 returns HTTP 402, see [package repository recovery](docs/package-repository-recovery.md).
 Keep signature checks enabled; this is an upstream download failure.
+
+### Read-only evidence for Coding
+
+Install the diagnostic helper once after deploying this revision:
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-diagnostics /usr/local/sbin/ai-diagnostics
+sudo ai-diagnostics ai-ops-agent
+sudo bash /opt/ai-ops-agent/deploy/install-ai-deploy
+```
+
+The updated deployment manager maintains this wrapper on later Ops deployments.
+`ai-diagnostics` accepts exactly one of the four managed service names. It returns
+bounded, redacted service status, recent journal entries, deployment state and
+cached package/tool check results. It runs no checks that change state and no
+repairs. Missing evidence is reported explicitly. Cached checks retain timestamps;
+refresh them in Ops if needed. Run it as the existing agent service user (root on
+the current installation); it is not a setuid or public HTTP endpoint.
