@@ -267,3 +267,9 @@ sudo install -m 755 /opt/ai-ops-agent/deploy/ai-tools /usr/local/sbin/ai-tools
 
 Reboots use a five-second systemd timer to let the dashboard answer first.
 The guard also checks queued deployments and detached package upgrades.
+
+### Package repository failures
+
+If `/update` or the dashboard's package check fails because the Caddy repository
+returns HTTP 402, see [package repository recovery](docs/package-repository-recovery.md).
+Keep signature checks enabled; this is an upstream download failure.
