@@ -246,6 +246,37 @@ credentials. Install once:
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-packages /usr/local/sbin/ai-packages
 ```
 
+## Backups (`ai-backup`, `/backup`)
+
+The code and the todos are in git; what is not is backed up: the four agents'
+env files (bot tokens, API keys), the coding agent's project list and state
+(tasks, queue), the deployment manager's state (rollback targets), the active
+todo project and the Caddyfile, plus any path you add to
+`/etc/ai-backup/extra-paths` (one per line, for example a proxy config).
+
+Every night at 04:00 server time (`OPS_BACKUP_HOUR`), the ops bot runs
+`ai-backup run`, which packs these into a tar.gz, encrypts it (AES-256 with the
+key in `/etc/ai-backup/key`), keeps the last seven in `/var/backups/ai-agents`,
+and the bot sends the archive to your chat, so a copy lives off the server.
+`/backup` does the same at once. `ai-backup status` shows the last run.
+
+Install once; it prints the key **once**, so save it in your password manager
+(without it no archive can be opened):
+
+```bash
+sudo bash /opt/ai-ops-agent/deploy/install-ai-backup
+```
+
+Restore, on any machine with openssl (KEYFILE holds the saved key line):
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass file:KEYFILE \
+    -in ai-backup-YYYYMMDD-HHMMSS.tar.gz.enc | tar -xz -C restore/
+```
+
+The archive keeps full paths (`etc/ai-pm-agent.env`, `var/lib/...`), so each
+file goes back where it came from.
+
 ## AI tool updates (`ai-tools`)
 
 `ai_ops_agent/tool_updates.py`, installed as `/usr/local/sbin/ai-tools`, does

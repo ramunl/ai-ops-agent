@@ -22,6 +22,7 @@ COMMANDS = build_command_list(
         Command("ai_update", "Queue safe deployments of installed agents"),
         Command("deployments", "Show current and previous deployments"),
         Command("rollback", "Restore a previous verified deployment"),
+        Command("backup", "Back up secrets and state now; sent here"),
     ]
 )
 BOT_COMMANDS = tuple(to_bot_commands(COMMANDS))

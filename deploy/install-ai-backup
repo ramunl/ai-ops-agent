@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Install ai-backup and create its encryption key once.
+# The key is printed ONCE: store it in your password manager. Without it the
+# archives the bot sends you cannot be opened, and it must not live only here.
+set -euo pipefail
+SOURCE="$(cd "$(dirname "$0")/.." && pwd)"
+[ "$(id -u)" -eq 0 ] || { echo "run as root: sudo bash $0" >&2; exit 1; }
+install -m 755 "$SOURCE/deploy/ai-backup" /usr/local/sbin/ai-backup
+install -d -m 700 /etc/ai-backup /var/backups/ai-agents /var/lib/ai-backup
+if [ ! -s /etc/ai-backup/key ]; then
+    (umask 077 && openssl rand -base64 48 > /etc/ai-backup/key)
+    echo "Backup key created. Save this line in your password manager NOW:"
+    echo
+    cat /etc/ai-backup/key
+    echo
+else
+    echo "Backup key already exists (/etc/ai-backup/key); not changed."
+fi
+if [ ! -e /etc/ai-backup/extra-paths ]; then
+    printf '# One absolute path per line, added to every backup (e.g. a proxy config).\n' \
+        > /etc/ai-backup/extra-paths
+    chmod 600 /etc/ai-backup/extra-paths
+fi
+/usr/local/sbin/ai-backup run

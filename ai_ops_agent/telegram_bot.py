@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram.ext import Application, CommandHandler
@@ -14,6 +15,7 @@ from ai_ops_agent.bot.agents import (
     my_agents,
     rollback,
 )
+from ai_ops_agent.bot.backup import backup_cmd, backup_forever
 from ai_ops_agent.bot.catalog import BOT_COMMANDS
 from ai_ops_agent.bot.help import core, start, version
 from ai_ops_agent.bot.packages import update_cmd, upgrade
@@ -29,12 +31,21 @@ async def register_bot_commands(application: Application) -> None:
     logger.info("Registered %d Telegram command hints", len(BOT_COMMANDS))
 
 
+async def on_start(application: Application) -> None:
+    """Startup: command hints, then the nightly backup loop."""
+    await register_bot_commands(application)
+    # Kept in bot_data so the task is not garbage-collected.
+    application.bot_data["backup_task"] = asyncio.get_running_loop().create_task(
+        backup_forever(application)
+    )
+
+
 def build_application() -> Application:
     """Build the application with command handlers and startup hooks."""
     app = (
         Application.builder()
         .token(config.OPS_TELEGRAM_BOT_TOKEN)
-        .post_init(register_bot_commands)
+        .post_init(on_start)
         .build()
     )
     app.add_handler(CommandHandler("start", start))
@@ -57,4 +68,5 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ai_update", ai_update))
     app.add_handler(CommandHandler("deployments", deployments))
     app.add_handler(CommandHandler("rollback", rollback))
+    app.add_handler(CommandHandler("backup", backup_cmd))
     return app

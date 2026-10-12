@@ -12,6 +12,7 @@ from ai_ops_agent import config
 from ai_ops_agent.telegram_bot import (
     BOT_COMMANDS,
     build_application,
+    on_start,
     register_bot_commands,
     version,
 )
@@ -67,7 +68,7 @@ class TelegramCommandHintsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {command.command for command in BOT_COMMANDS}, handler_commands
         )
-        self.assertIs(application.post_init, register_bot_commands)
+        self.assertIs(application.post_init, on_start)
 
 
 if __name__ == "__main__":
