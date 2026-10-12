@@ -187,3 +187,34 @@ def test_make_backup_reads_failures_too():
         bot_backup, "run_command", AsyncMock(return_value="sh: not found")
     ):
         assert asyncio.run(bot_backup.make_backup())["error"] == "sh: not found"
+
+
+def test_container_config_is_copied_fresh_into_each_backup(paths):
+    paths.extra.write_text("docker:amnezia-awg2:/opt/amnezia\n")
+    with patch("ai_ops_agent.backup_containers.subprocess.run") as run:
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout=b"fresh container tar"),
+            SimpleNamespace(returncode=0, stdout=b'[{"Name":"amnezia-awg2"}]'),
+        ]
+        result = backup.run(paths, plain_copy)
+    assert "docker:amnezia-awg2:/opt/amnezia" in result["included"]
+    with tarfile.open(result["file"]) as archive:
+        assert (
+            archive.extractfile("containers/amnezia-awg2/opt_amnezia.tar").read()
+            == b"fresh container tar"
+        )
+    assert run.call_args_list[0].args[0] == [
+        "docker",
+        "cp",
+        "amnezia-awg2:/opt/amnezia",
+        "-",
+    ]
+
+
+def test_missing_container_fails_backup_instead_of_silently_skipping(paths):
+    paths.extra.write_text("docker:amnezia-awg2:/opt/amnezia\n")
+    with patch("ai_ops_agent.backup_containers.subprocess.run") as run:
+        run.return_value = SimpleNamespace(returncode=1, stdout=b"")
+        with pytest.raises(OSError, match="Container backup failed"):
+            backup.run(paths, plain_copy)
+    assert not paths.archives.exists()

@@ -322,3 +322,23 @@ cached package/tool check results. It runs no checks that change state and no
 repairs. Missing evidence is reported explicitly. Cached checks retain timestamps;
 refresh them in Ops if needed. Run it as the existing agent service user (root on
 the current installation); it is not a setuid or public HTTP endpoint.
+
+### Proxy and VPN backup paths
+
+Add host configuration directories (for example `/etc/mtproxy`,
+`/opt/mtg/config.toml`, and `/opt/amnezia`) to `/etc/ai-backup/extra-paths`.
+For Amnezia configurations stored inside Docker, add:
+
+```text
+docker:amnezia-awg2:/opt/amnezia
+```
+
+Every backup reads that directory afresh using `docker cp` and includes Docker
+inspection metadata. Nothing is copied back into the running container. A missing
+container or failed copy fails the backup rather than silently omitting VPN keys.
+After decrypting the outer archive, container data is in
+`containers/amnezia-awg2/opt_amnezia.tar`; inspect this nested tar before restoring
+its contents into a replacement container. The metadata records the container
+settings, but the Docker image itself is not backed up. Preserve the Amnezia
+Dockerfile too so the image can be rebuilt. These archives contain VPN private
+keys and client records; keep the encryption key separately.

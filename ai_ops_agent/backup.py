@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ai_ops_agent.backup_containers import add_container, is_container_path
 from ai_ops_agent.cleanup import exclusive
 
 # Not in any repository, and painful or impossible to recreate.
@@ -77,7 +78,7 @@ def wanted_paths(paths: Paths) -> list[str]:
     with contextlib.suppress(FileNotFoundError):
         for line in paths.extra.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line and not line.startswith("#") and line.startswith("/"):
+            if line.startswith("/") or is_container_path(line):
                 extra.append(line)
     return list(dict.fromkeys([*paths.files, *extra]))
 
@@ -88,6 +89,10 @@ def pack(wanted: list[str]) -> tuple[bytes, list[str], list[str]]:
     included, skipped = [], []
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for name in wanted:
+            if is_container_path(name):
+                add_container(archive, name)
+                included.append(name)
+                continue
             if not os.path.exists(name):
                 skipped.append(name)
                 continue
