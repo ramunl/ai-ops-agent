@@ -342,3 +342,25 @@ its contents into a replacement container. The metadata records the container
 settings, but the Docker image itself is not backed up. Preserve the Amnezia
 Dockerfile too so the image can be rebuilt. These archives contain VPN private
 keys and client records; keep the encryption key separately.
+
+## Security check (ai-audit)
+
+`ai_ops_agent/audit.py` (with `security_stats.py`), installed as
+`/usr/local/sbin/ai-audit`, reads the server's security state and prints one
+JSON report: `ai-audit check`. It only reads fixed commands (`journalctl` for
+sshd, `fail2ban-client`, `who`, `ss`, `sshd -T`, `ufw`, `apt-get -s`) and file
+permissions; it changes nothing and nothing leaves the server.
+
+- **Stats:** failed and successful SSH logins in 24 h, top attacking IPs and
+  tried user names, fail2ban bans per jail (now and in total), who is logged
+  in, public ports with their process, firewall state.
+- **Findings, with the exact fix:** SSH password or root login, secret files
+  readable by others, no fail2ban, firewall off, waiting security updates,
+  automatic updates off, reboot needed, unexpected public ports.
+
+`/security` shows the report; the bot also sends it daily at `OPS_AUDIT_HOUR`
+(server local time, default 9). Install (or update) the command once:
+
+```bash
+sudo install -m 755 /opt/ai-ops-agent/deploy/ai-audit /usr/local/sbin/ai-audit
+```

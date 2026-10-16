@@ -23,6 +23,7 @@ COMMANDS = build_command_list(
         Command("deployments", "Show current and previous deployments"),
         Command("rollback", "Restore a previous verified deployment"),
         Command("backup", "Back up secrets and state now; sent here"),
+        Command("security", "SSH attacks, bans, sessions, ports and what to fix"),
     ]
 )
 BOT_COMMANDS = tuple(to_bot_commands(COMMANDS))

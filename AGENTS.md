@@ -11,7 +11,7 @@ credits are down.
 - `ai_ops_agent/bot/` – Telegram adapters (owner check first in every
   handler); service modules below never import Telegram.
 - `deploy/ai-*` – root CLIs installed to `/usr/local/sbin` (`ai-deploy`,
-  `ai-backup`, `ai-packages`, `ai-tools`, `ai-service`, `ai-cleanup`,
+  `ai-backup`, `ai-audit`, `ai-packages`, `ai-tools`, `ai-service`, `ai-cleanup`,
   `ai-diagnostics`). They run with the system `python3`, **standard library
   only, no bot credentials**, and are also called by `ai-dashboard`. Keep
   their arguments fixed and their output stable (the dashboard parses it).

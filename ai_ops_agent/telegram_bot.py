@@ -19,6 +19,7 @@ from ai_ops_agent.bot.backup import backup_cmd, backup_forever
 from ai_ops_agent.bot.catalog import BOT_COMMANDS
 from ai_ops_agent.bot.help import core, start, version
 from ai_ops_agent.bot.packages import update_cmd, upgrade
+from ai_ops_agent.bot.security import audit_forever, security_cmd
 from ai_ops_agent.bot.services import errors, logs, reboot, restart, services
 from ai_ops_agent.bot.system import disk, health, memory, uptime
 
@@ -32,11 +33,14 @@ async def register_bot_commands(application: Application) -> None:
 
 
 async def on_start(application: Application) -> None:
-    """Startup: command hints, then the nightly backup loop."""
+    """Startup: command hints, then the nightly backup and daily audit loops."""
     await register_bot_commands(application)
     # Kept in bot_data so the task is not garbage-collected.
     application.bot_data["backup_task"] = asyncio.get_running_loop().create_task(
         backup_forever(application)
+    )
+    application.bot_data["audit_task"] = asyncio.get_running_loop().create_task(
+        audit_forever(application)
     )
 
 
@@ -69,4 +73,5 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("deployments", deployments))
     app.add_handler(CommandHandler("rollback", rollback))
     app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("security", security_cmd))
     return app
