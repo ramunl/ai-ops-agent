@@ -1,0 +1,9 @@
+#!/bin/sh
+# Install the fixed collector and its lightweight sampler. Run as root.
+set -eu
+SOURCE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+install -m 755 "$SOURCE/deploy/ai-clients" /usr/local/sbin/ai-clients
+install -m 644 "$SOURCE/deploy/ai-clients.service" /etc/systemd/system/ai-clients.service
+install -m 644 "$SOURCE/deploy/ai-clients.timer" /etc/systemd/system/ai-clients.timer
+systemctl daemon-reload
+systemctl enable --now ai-clients.timer

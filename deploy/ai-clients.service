@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample service clients and traffic for the dashboard
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ai-clients check
+TimeoutStartSec=55
+UMask=0077
+StandardOutput=null

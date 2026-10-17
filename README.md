@@ -364,3 +364,35 @@ permissions; it changes nothing and nothing leaves the server.
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-audit /usr/local/sbin/ai-audit
 ```
+
+## Connected clients and traffic
+
+`ai-clients check` collects fixed, read-only metrics for AmneziaWG, Telegram
+MTProxy (2398), mtg (9443), the HTTPS relay and the media/IPTV container.
+Install its wrapper and 30-second background sampler after deploying:
+`sudo sh /opt/ai-ops-agent/deploy/install-ai-clients`.
+The collector uses only the standard library and stores its last sample in
+`/var/lib/ai-clients/report.json` (private directory, atomic writes, flock).
+It never reads VPN private keys or proxy secrets. VPN display names come from
+Amnezia's clientsTable; anonymous device IDs are hashes of public keys.
+
+VPN activity means a handshake within 180 seconds, not proof of continuous
+use. TCP counts include only established inbound sockets on each listening
+port; Telegram backend sockets are excluded. Media sockets are read inside
+the container network namespace. Source IP addresses may represent several
+people or a reverse proxy. Profiles can also be shared. Counts are not summed
+across services. Raw profiles, browsing URLs and proxy credentials are omitted.
+
+The relay's fixed loopback exporter is `127.0.0.1:18081/metrics`. mtg's exporter
+is configured at `127.0.0.1:19445/metrics` using `[stats.prometheus]` with
+`enabled = true`, `bind-to = "127.0.0.1:19445"`, `http-path = "/metrics"`, and
+`metric-prefix = "mtg"`. Keep these exporters bound to localhost. Configuration
+changes require a proxy restart; back up its config first. MTProxy's native
+stats endpoint is unavailable on this installation, so it reports sockets only.
+
+Traffic counters belong to the current service/interface lifetime. Media
+traffic includes upstream and downstream container traffic (content can count
+twice). Daily usage and peaks are *sampled*, start at the first observation
+of each UTC day, and can miss short connections or bytes across counter resets.
+Rates use counter deltas, never absolute counters; rates older than 120 seconds
+are omitted. No historical data before installation is reconstructed.

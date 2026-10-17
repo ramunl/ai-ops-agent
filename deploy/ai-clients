@@ -1,0 +1,11 @@
+#!/bin/sh
+# ai-clients check: service connections and traffic (JSON output), read-only.
+# Installed as /usr/local/sbin/ai-clients; the logic is ai_ops_agent/audit.py,
+# run with the system python3 (standard library only, no bot credentials).
+APP_DIR="${AI_OPS_AGENT_DIR:-/opt/ai-ops-agent}"
+exec /usr/bin/env python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from ai_ops_agent.clients import main
+sys.exit(main(sys.argv[2:]))
+' "$APP_DIR" "$@"

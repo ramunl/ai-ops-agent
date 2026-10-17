@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample service clients every 30 seconds
+
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=30
+AccuracySec=2
+
+[Install]
+WantedBy=timers.target
