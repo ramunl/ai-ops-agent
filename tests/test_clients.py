@@ -128,7 +128,7 @@ def test_collect_isolates_missing_services_and_never_uses_a_shell():
         return None
 
     result = sources.collect(probe, lambda url: None, 1000)
-    assert len(result) == 5
+    assert len(result) == 6
     assert all(not item["available"] for item in result)
     assert all(isinstance(argv, list) for argv in calls)
     assert not any("dump" in argv for argv in calls)
@@ -167,7 +167,11 @@ def test_media_uses_container_namespace_and_combined_network_counters():
             return "0 0 172.17.0.2:8080 203.0.113.8:50000"
         return None
 
-    result = sources.collect(probe, lambda url: None, 1000)[-1]
+    result = next(
+        item
+        for item in sources.collect(probe, lambda url: None, 1000)
+        if item["id"] == "media"
+    )
     assert result["active"] == 1
     assert result["traffic_bytes"] == 500
     assert all(argv[2] == "1234" for argv in calls if argv[0] == "nsenter")

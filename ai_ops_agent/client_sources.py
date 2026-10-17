@@ -12,6 +12,8 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable
 
+from ai_ops_agent import ssh_clients
+
 Runner = Callable[[list[str]], str | None]
 Fetcher = Callable[[str], str | None]
 ACTIVE_SECONDS = 180
@@ -53,17 +55,18 @@ def metrics(text: str) -> list[tuple[str, str, float]]:
     return found
 
 
-def sockets(text: str | None, port: int) -> dict:
+def sockets(text: str | None, port: int | set[int]) -> dict:
     """Count only established inbound sockets on the service's listening port."""
     if text is None:
         return {"available": False, "error": "Connection probe unavailable"}
     peers: Counter[str] = Counter()
+    wanted = {str(port)} if isinstance(port, int) else {str(p) for p in port}
     for line in text.splitlines():
         fields = line.split()
         if len(fields) < 4:
             continue
         local, remote = fields[2:4]  # ss -Htn state established omits state
-        if local.rpartition(":")[2] != str(port):
+        if local.rpartition(":")[2] not in wanted:
             continue
         address = remote.rpartition(":")[0].strip("[]")
         try:
@@ -184,7 +187,7 @@ def exporter(text: str | None, prefix: str) -> dict:
 
 
 def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
-    """Collect the five known services, isolating missing tools per service."""
+    """Collect the known services, isolating missing tools per service."""
     host = probe(["ss", "-Htn", "state", "established"])
     listeners = probe(["ss", "-Hltn"])
     ports = {
@@ -266,4 +269,11 @@ def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
             "container traffic, so relayed content can be counted twice.",
         }
     )
+    ssh = {"id": "ssh", "name": "SSH", **ssh_clients.collect(probe)}
+    ssh_ports = set(ssh.pop("ports"))
+    network = sockets(host, ssh_ports) if ssh_ports else {}
+    if network.get("available"):
+        ssh["connections"] = network["connections"]
+        ssh["source_addresses"] = network["source_addresses"]
+    services.append(ssh)
     return services

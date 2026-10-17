@@ -396,3 +396,11 @@ twice). Daily usage and peaks are *sampled*, start at the first observation
 of each UTC day, and can miss short connections or bytes across counter resets.
 Rates use counter deltas, never absolute counters; rates older than 120 seconds
 are omitted. No historical data before installation is reconstructed.
+
+SSH appears in Connected clients as authenticated SSH connections, detected
+from authenticated sshd child processes (including non-terminal commands and
+tunnels). Listener, privilege-separation and pre-authentication processes are
+excluded. Multiplexed SSH channels count as one transport. Raw inbound TCP
+connections and source addresses are shown separately and can include login
+attempts. Live SSH settings supply the listening ports; missing process data
+is unavailable rather than zero. SSH checks themselves briefly add a connection.
