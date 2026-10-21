@@ -37,7 +37,7 @@ def run(
     timeout: int = DEFAULT_TIMEOUT,
     env: dict[str, str] | None = None,
 ) -> str:
-    """Run a command given as an argument list (never shell=True)."""
+    """Run an argument list, preserving silent exit codes as '(exit N)'."""
     logger.info("Running command: %s timeout=%s", cmd, timeout)
     try:
         process_env = os.environ.copy()
