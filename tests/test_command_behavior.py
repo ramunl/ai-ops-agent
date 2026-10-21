@@ -2,8 +2,12 @@
 
 import asyncio
 import fcntl
+import os
+import signal
 import subprocess
+import sys
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -319,3 +323,146 @@ def test_unauthorized_reboot_never_calls_shared_entrypoint(chat, monkeypatch):
     asyncio.run(services.reboot(chat, SimpleNamespace(args=[])))
     reboot.assert_not_called()
     chat.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.parametrize("parent_exits", [False, True])
+def test_shell_timeout_kills_child_retaining_pipes(tmp_path, monkeypatch, parent_exits):
+    from ai_ops_agent import shell
+
+    marker = tmp_path / "delayed-write"
+    child_pid = tmp_path / "child-pid"
+    processes = []
+    popen = subprocess.Popen
+
+    def launch(*args, **kwargs):
+        proc = popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(shell.subprocess, "Popen", launch)
+    script = """
+import os
+import pathlib
+import sys
+import time
+
+pid = os.fork()
+if pid == 0:
+    time.sleep(3)
+    pathlib.Path(sys.argv[1]).write_text('unexpected write')
+    os._exit(0)
+pathlib.Path(sys.argv[2]).write_text(str(pid))
+if sys.argv[3] == 'True':
+    os._exit(0)
+time.sleep(30)
+"""
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(
+            shell.run(
+                [
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(marker),
+                    str(child_pid),
+                    str(parent_exits),
+                ],
+                timeout=1,
+            )
+        ),
+        daemon=True,
+    )
+    started = time.monotonic()
+    try:
+        worker.start()
+        worker.join(timeout=2.5)
+        assert not worker.is_alive(), "Timeout cleanup blocked on inherited pipes"
+        assert results == ["Command timed out after 1s"]
+        assert child_pid.exists(), "Child was not launched before the timeout"
+        time.sleep(max(0, started + 3.5 - time.monotonic()))
+        assert not marker.exists()
+    finally:
+        # Kill individually as well: the old implementation has no isolated group.
+        if child_pid.exists():
+            try:
+                os.kill(int(child_pid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for proc in processes:
+            proc.kill()
+            proc.wait(timeout=2)
+        worker.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "missing_group", "kill", "close", "wait", "wait_timeout"]
+)
+def test_shell_timeout_cleanup_is_bounded_and_preserves_failure(
+    monkeypatch, caplog, failure
+):
+    from ai_ops_agent import shell
+
+    proc = Mock(pid=12345, returncode=0)
+    proc.communicate.side_effect = subprocess.TimeoutExpired(["command"], 7)
+    killpg = Mock()
+    if failure == "missing_group":
+        killpg.side_effect = ProcessLookupError("already gone")
+    elif failure == "kill":
+        killpg.side_effect = PermissionError("denied")
+    elif failure == "close":
+        proc.stdout.close.side_effect = OSError("close failed")
+    elif failure == "wait":
+        proc.wait.side_effect = OSError("wait failed")
+    elif failure == "wait_timeout":
+        proc.wait.side_effect = subprocess.TimeoutExpired(["command"], 1)
+    launch = Mock(return_value=proc)
+    monkeypatch.setattr(shell.subprocess, "Popen", launch)
+    monkeypatch.setattr(shell.os, "killpg", killpg)
+
+    assert shell.run(["command"], timeout=7) == "Command timed out after 7s"
+
+    assert launch.call_args.kwargs["start_new_session"] is True
+    killpg.assert_called_once_with(proc.pid, signal.SIGKILL)
+    proc.communicate.assert_called_once_with(timeout=7)
+    proc.stdout.close.assert_called_once_with()
+    proc.stderr.close.assert_called_once_with()
+    proc.wait.assert_called_once_with(timeout=shell.TIMEOUT_CLEANUP_TIMEOUT)
+    assert 0 < shell.TIMEOUT_CLEANUP_TIMEOUT <= 1
+    if failure in {"kill", "close", "wait", "wait_timeout"}:
+        assert "Failed to" in caplog.text
+    else:
+        assert "Failed to" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "code,stdout,stderr,expected",
+    [
+        (0, " out ", "err\n", "out err"),
+        (2, "out", "err\n", "[exit 2] outerr"),
+        (0, "", "", "(exit 0)"),
+        (2, "", "", "(exit 2)"),
+    ],
+)
+def test_shell_preserves_output_and_environment(
+    monkeypatch, code, stdout, stderr, expected
+):
+    from ai_ops_agent import shell
+
+    monkeypatch.setenv("SHELL_TEST_INHERITED", "inherited")
+    monkeypatch.setenv("SHELL_TEST_OVERRIDE", "original")
+    script = (
+        "import os, sys; "
+        "assert os.environ['SHELL_TEST_INHERITED'] == 'inherited'; "
+        "assert os.environ['SHELL_TEST_OVERRIDE'] == 'override'; "
+        "sys.stdout.write(sys.argv[1]); sys.stderr.write(sys.argv[2]); "
+        "sys.exit(int(sys.argv[3]))"
+    )
+    assert (
+        shell.run(
+            [sys.executable, "-c", script, stdout, stderr, str(code)],
+            env={"SHELL_TEST_OVERRIDE": "override"},
+        )
+        == expected
+    )
+    assert os.environ["SHELL_TEST_OVERRIDE"] == "original"
