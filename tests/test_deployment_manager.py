@@ -47,6 +47,7 @@ class FakeSystem(System):
         return super().run(args, timeout, environment=environment)
 
     def restart(self, target):
+        self.commands.append(["restart", target.name])
         self.restarts.append(git(target.repo, "rev-parse", "HEAD"))
         if self.fail_restarts:
             self.fail_restarts -= 1
@@ -305,9 +306,13 @@ def test_rollback_restores_previous_when_current_cannot_start(manager):
     assert target.artifacts[1][1].read_text() == "OLD unit"
     # The broken release is started once, stopped, then only the restored one is verified.
     assert manager.system.restarts[-2:] == [broken, before]
-    assert ["systemctl", "stop", target.service] in (
-        manager.system.commands[commands_before:]
-    )
+    events = manager.system.commands[commands_before:]
+    restarts = [index for index, event in enumerate(events) if event[0] == "restart"]
+    stop = events.index(["systemctl", "stop", target.service])
+    # Stop the broken release before the restored bundle is swapped in and started.
+    assert len(restarts) == 2
+    assert restarts[0] < stop < events.index(["systemctl", "daemon-reload"])
+    assert events.index(["systemctl", "daemon-reload"]) < restarts[1]
     state = manager.store.read()
     assert state["active"] is None
     record = state["targets"][target.name]
@@ -368,6 +373,21 @@ def test_rollback_fails_when_previous_bundle_is_also_unhealthy(manager):
     assert record["previous"]["commit"] == before
     # The journal stays queued so the interrupted rollback can be retried.
     assert state["active"]["recovery"]
+
+
+def test_rollback_recovery_names_the_release_it_restored(manager):
+    target = manager.fleet["test-agent"]
+    before, broken = deploy_then_break_current(manager)
+    # Broken current fails, restored previous fails, then the broken release restarts.
+    manager.system.fail_restarts = 2
+    job = manager.reserve("rollback", target.name, None, before)
+    assert not manager.execute(job["operation"])
+    record = manager.store.read()["targets"][target.name]
+    assert record["status"] == "failed"
+    assert record["current"]["commit"] == broken
+    assert record["previous"]["commit"] == before
+    assert "pre-rollback release restored and verified" in record["error"]
+    assert "previous version" not in record["error"]
 
 
 def test_initial_status_reports_unverified_observed_checkout(manager):
