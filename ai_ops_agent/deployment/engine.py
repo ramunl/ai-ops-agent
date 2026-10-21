@@ -172,15 +172,16 @@ class Manager:
             "verified_at": timestamp(),
         }
 
-    def _baseline(self, state: dict, target: Target) -> dict:
+    def _checked_commit(self, state: dict, target: Target) -> None:
         record = state["targets"][target.name]
         commit = self.system.git(target, "rev-parse", "HEAD")
         if record.get("current") and record["current"]["commit"] != commit:
             raise DeploymentError(
                 "Checkout drifted from verified deployment; restore it manually"
             )
-        # Reverification also bootstraps a pre-manager checkout, proving its process.
-        self.system.restart(target)
+
+    def _verified_current(self, state: dict, target: Target) -> dict:
+        record = state["targets"][target.name]
         current = self._identity(
             target, (record.get("current") or {}).get("ref", "bootstrap")
         )
@@ -188,14 +189,45 @@ class Manager:
         self.store.write(state)
         return current
 
+    def _baseline(self, state: dict, target: Target) -> dict:
+        """Gate a deployment on the live release starting and verifying."""
+        self._checked_commit(state, target)
+        # Reverification also bootstraps a pre-manager checkout, proving its process.
+        self.system.restart(target)
+        return self._verified_current(state, target)
+
+    def _probe_current(self, state: dict, target: Target) -> str | None:
+        """Check the live release for rollback without gating recovery on it.
+
+        Returns the startup failure, or None after recording a verified identity.
+        """
+        self._checked_commit(state, target)
+        try:
+            self.system.restart(target)
+        except DeploymentError as error:
+            return str(error)
+        self._verified_current(state, target)
+        return None
+
     def _transaction(self, state: dict, job: dict, name: str) -> bool:
         target = self.fleet[name]
         record = state["targets"][name]
         backup_path = self.store.root / f"{name}-{uuid.uuid4().hex}"
+        startup_failure = None
         try:
             self.system.log(target, f"{job['operation']} {job['action']} started")
             self.system.clean(target)
-            baseline = self._baseline(state, target)
+            if job["action"] == "rollback":
+                # A broken current release must not block restoring its predecessor.
+                startup_failure = self._probe_current(state, target)
+                if startup_failure and not record.get("current"):
+                    raise DeploymentError(
+                        "Current release cannot start and has no verified record"
+                    )
+                # Unverified failures keep the last verified identity as the baseline.
+                baseline = record.get("current")
+            else:
+                baseline = self._baseline(state, target)
             snapshot(target, backup_path)
             job["recovery"] = {
                 "target": name,
@@ -217,6 +249,36 @@ class Manager:
                 requested_ref = job["requested_ref"] or "main"
                 self.system.install(target)
             self.system.restart(target)
+            if startup_failure:
+                # Only the restored predecessor is verified; the failed release keeps
+                # no rollback pointer and its snapshot is discarded.
+                reason = (
+                    f"Current release failed to start ({startup_failure}); "
+                    "restored previous verified release"
+                )
+                record.update(
+                    current=self._identity(target, requested_ref),
+                    status="healthy",
+                    error=None,
+                    recovery={
+                        "reason": reason,
+                        "operation": job["operation"],
+                        "failed_commit": baseline["commit"],
+                        "restored_commit": job["commits"][name],
+                        "at": timestamp(),
+                    },
+                    updated_at=timestamp(),
+                )
+                job.pop("recovery")
+                self._history(record, job, "recovered")
+                self.store.write(state)
+                self.system.log(
+                    target,
+                    f"{job['operation']} recovered to verified "
+                    f"{record['current']['commit']}: {reason}",
+                )
+                shutil.rmtree(backup_path, ignore_errors=True)
+                return True
             previous = dict(baseline, backup=str(backup_path))
             old_backup = (record.get("previous") or {}).get("backup")
             record.update(
@@ -238,6 +300,10 @@ class Manager:
             return True
         except (DeploymentError, OSError, ValueError, KeyError) as error:
             record["error"] = str(error)
+            if startup_failure:
+                record["error"] = (
+                    f"Current release failed to start ({startup_failure}); {error}"
+                )
             if job.get("recovery"):
                 return self._recover_interrupted(state, job)
             record.update(status="failed", updated_at=timestamp())

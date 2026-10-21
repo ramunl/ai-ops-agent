@@ -15,7 +15,12 @@ def load_workflow(name):
 def test_deployment_has_no_independent_triggers():
     workflow = load_workflow("deploy.yml")
     assert workflow["on"] == {
-        "workflow_call": {"secrets": {"DEPLOY_WEBHOOK_URL": {"required": "true"}}}
+        "workflow_call": {
+            "secrets": {
+                "DEPLOY_WEBHOOK_URL": {"required": "true"},
+                "DEPLOY_WEBHOOK_TOKEN": {"required": "true"},
+            },
+        },
     }
 
 
@@ -25,7 +30,10 @@ def test_deployment_requires_successful_checks_on_main_push():
         "needs": "test",
         "if": "github.event_name == 'push' && github.ref == 'refs/heads/main'",
         "uses": "./.github/workflows/deploy.yml",
-        "secrets": {"DEPLOY_WEBHOOK_URL": "${{ secrets.DEPLOY_WEBHOOK_URL }}"},
+        "secrets": {
+            "DEPLOY_WEBHOOK_URL": "${{ secrets.DEPLOY_WEBHOOK_URL }}",
+            "DEPLOY_WEBHOOK_TOKEN": "${{ secrets.DEPLOY_WEBHOOK_TOKEN }}",
+        },
     }
 
 

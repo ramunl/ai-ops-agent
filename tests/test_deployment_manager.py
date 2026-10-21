@@ -282,6 +282,94 @@ def test_stale_rollback_confirmation_does_not_queue(manager):
     assert manager.store.read()["active"] is None
 
 
+def deploy_then_break_current(manager):
+    target = manager.fleet["test-agent"]
+    before = git(target.repo, "rev-parse", "HEAD")
+    job = manager.reserve("deploy", target.name, "main")
+    assert manager.execute(job["operation"])
+    broken = git(target.repo, "rev-parse", "HEAD")
+    assert broken != before
+    return before, broken
+
+
+def test_rollback_restores_previous_when_current_cannot_start(manager):
+    target = manager.fleet["test-agent"]
+    before, broken = deploy_then_break_current(manager)
+    manager.system.fail_restarts = 1
+    commands_before = len(manager.system.commands)
+    job = manager.reserve("rollback", target.name, None, before)
+    assert manager.execute(job["operation"])
+    assert git(target.repo, "rev-parse", "HEAD") == before
+    assert (target.venv / "dependency").read_text() == "OLD exact dependency"
+    assert not target.artifacts[0][1].exists()
+    assert target.artifacts[1][1].read_text() == "OLD unit"
+    # The broken release is started once, stopped, then only the restored one is verified.
+    assert manager.system.restarts[-2:] == [broken, before]
+    assert ["systemctl", "stop", target.service] in (
+        manager.system.commands[commands_before:]
+    )
+    state = manager.store.read()
+    assert state["active"] is None
+    record = state["targets"][target.name]
+    assert record["status"] == "healthy"
+    assert record["error"] is None
+    assert record["current"]["commit"] == before
+    assert record["current"]["version"] == "1.0.0"
+    assert record["recovery"]["failed_commit"] == broken
+    assert record["recovery"]["restored_commit"] == before
+    assert "failed to start" in record["recovery"]["reason"]
+    assert record["history"][-1]["status"] == "recovered"
+
+
+def test_recovery_keeps_previous_verified_pointer(manager):
+    target = manager.fleet["test-agent"]
+    before, _ = deploy_then_break_current(manager)
+    previous = manager.store.read()["targets"][target.name]["previous"]
+    assert previous["commit"] == before
+    manager.system.fail_restarts = 1
+    job = manager.reserve("rollback", target.name, None, before)
+    assert manager.execute(job["operation"])
+    record = manager.store.read()["targets"][target.name]
+    assert record["previous"] == previous
+    assert record["previous"]["verified_at"]
+    assert Path(previous["backup"]).is_dir()
+
+
+def test_recovery_never_promotes_failed_release_to_verified_or_rollback_target(
+    manager,
+):
+    target = manager.fleet["test-agent"]
+    before, broken = deploy_then_break_current(manager)
+    manager.system.fail_restarts = 1
+    job = manager.reserve("rollback", target.name, None, before)
+    assert manager.execute(job["operation"])
+    record = manager.store.read()["targets"][target.name]
+    assert record["current"]["commit"] != broken
+    assert record["previous"]["commit"] != broken
+    # Only the verified predecessor's snapshot remains; the failed one is discarded.
+    assert [path.name for path in manager.store.root.glob("test-agent-*")] == [
+        Path(record["previous"]["backup"]).name
+    ]
+
+
+def test_rollback_fails_when_previous_bundle_is_also_unhealthy(manager):
+    target = manager.fleet["test-agent"]
+    before, broken = deploy_then_break_current(manager)
+    # Fail the broken current, the restored previous, and the recovery restart.
+    manager.system.fail_restarts = 3
+    job = manager.reserve("rollback", target.name, None, before)
+    assert not manager.execute(job["operation"])
+    state = manager.store.read()
+    record = state["targets"][target.name]
+    assert record["status"] == "rollback_failed"
+    assert "failed to start" in record["error"]
+    assert "ROLLBACK FAILED" in record["error"]
+    assert record["current"]["commit"] == broken
+    assert record["previous"]["commit"] == before
+    # The journal stays queued so the interrupted rollback can be retried.
+    assert state["active"]["recovery"]
+
+
 def test_initial_status_reports_unverified_observed_checkout(manager):
     record = manager.status()["targets"][0]
     assert record["status"] == "untracked"
