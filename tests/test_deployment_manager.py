@@ -168,6 +168,96 @@ def test_interrupted_worker_can_restore_without_repeating_deploy(manager):
     assert manager.status()["targets"][0]["current"]["version"] == "1.0.0"
 
 
+def test_runtime_swap_interruption_can_retry_same_recovery(manager, monkeypatch):
+    target = manager.fleet["test-agent"]
+    before = git(target.repo, "rev-parse", "HEAD")
+    target.artifacts[1][1].chmod(0o640)
+    original_install = manager.system.install
+    installs = []
+
+    def fail_after_install(target):
+        installs.append(target.name)
+        original_install(target)
+        manager.system.fail_restarts = 1
+
+    monkeypatch.setattr(manager.system, "install", fail_after_install)
+    replacement = target.venv.with_name(f"{target.venv.name}.ai-deploy-restore")
+    original_rename = Path.rename
+
+    def interrupt_rename(path, destination):
+        if path == replacement:
+            assert destination == target.venv
+            raise KeyboardInterrupt()
+        return original_rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", interrupt_rename)
+    job = manager.reserve("deploy", target.name, "main")
+    recovery = None
+    for _ in range(2):
+        with pytest.raises(KeyboardInterrupt):
+            manager.execute(job["operation"])
+        journal = manager.store.read()["active"]["recovery"]
+        if recovery is None:
+            recovery = journal
+        assert journal == recovery
+        source = Path(journal["backup"])
+        assert not target.venv.exists()
+        for runtime in (replacement, source / "venv"):
+            assert sorted(p.name for p in runtime.iterdir()) == ["bin", "dependency"]
+            assert (runtime / "bin").is_dir()
+            assert (runtime / "dependency").read_text() == "OLD exact dependency"
+        assert (source / "artifact-1").read_text() == "OLD unit"
+        assert json.loads((source / "artifacts.json").read_text())["artifacts"] == [
+            {"path": str(target.artifacts[0][1]), "exists": False, "mode": None},
+            {"path": str(target.artifacts[1][1]), "exists": True, "mode": 0o640},
+        ]
+        assert target.artifacts[0][1].read_text() == "NEW bridge"
+        assert target.artifacts[1][1].read_text() == "NEW unit"
+
+    monkeypatch.setattr(Path, "rename", original_rename)
+    assert manager.execute(job["operation"]) is False
+    assert installs == [target.name]
+    assert (target.venv / "dependency").read_text() == "OLD exact dependency"
+    assert not target.artifacts[0][1].exists()
+    assert target.artifacts[1][1].read_text() == "OLD unit"
+    assert target.artifacts[1][1].stat().st_mode & 0o777 == 0o640
+    assert git(target.repo, "rev-parse", "HEAD") == before
+    record = manager.status()["targets"][0]
+    assert record["current"] == recovery["baseline"]
+    assert record["current"]["commit"] == before
+    assert record["current"]["version"] == "1.0.0"
+    assert record["previous"] is None
+    assert record["status"] == "failed"
+    assert "restored and verified" in record["error"]
+    assert manager.store.read()["active"] is None
+    assert not source.exists()
+    assert not replacement.exists()
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), OSError("I/O error")])
+def test_runtime_removal_propagates_filesystem_errors(manager, monkeypatch, error):
+    import shutil
+
+    from ai_ops_agent.deployment.backup import restore, snapshot
+
+    target = manager.fleet["test-agent"]
+    source = manager.store.root / "snapshot"
+    manager.store.write(manager.store.read())
+    snapshot(target, source)
+    original_rmtree = shutil.rmtree
+
+    def fail_runtime_removal(path, **kwargs):
+        if path == target.venv:
+            raise error
+        return original_rmtree(path, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_runtime_removal)
+    with pytest.raises(type(error), match=str(error)):
+        restore(target, source)
+    assert (target.venv / "dependency").read_text() == "OLD exact dependency"
+    assert (source / "venv/dependency").read_text() == "OLD exact dependency"
+
+
 def test_unknown_refs_targets_dirty_checkout_and_duplicate_jobs_refused(manager):
     with pytest.raises(DeploymentError, match="Unknown"):
         manager.reserve("deploy", "arbitrary", "main")
