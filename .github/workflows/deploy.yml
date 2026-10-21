@@ -5,13 +5,15 @@ on:
     secrets:
       DEPLOY_WEBHOOK_URL:
         required: true
+      DEPLOY_WEBHOOK_TOKEN:
+        required: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate deploy webhook URL
+      - name: Validate deploy webhook settings
         shell: python
         run: |
           import os
@@ -19,15 +21,27 @@ jobs:
           from urllib.parse import urlparse
 
           url = os.environ.get("DEPLOY_WEBHOOK_URL", "")
+          token = os.environ.get("DEPLOY_WEBHOOK_TOKEN", "")
           parsed = urlparse(url)
 
           checks = [
               (bool(url), "DEPLOY_WEBHOOK_URL is empty"),
-              (parsed.scheme == "http", "DEPLOY_WEBHOOK_URL must use http"),
-              (parsed.hostname == "161.35.17.201", "DEPLOY_WEBHOOK_URL host is not the expected server IP"),
-              (parsed.port == 9000, "DEPLOY_WEBHOOK_URL port must be 9000"),
-              (parsed.path == "/hooks/ai-ops-agent-update", "DEPLOY_WEBHOOK_URL path must be /hooks/ai-ops-agent-update"),
-              (parsed.query.startswith("secret="), "DEPLOY_WEBHOOK_URL must include the secret query parameter"),
+              (parsed.scheme == "https", "DEPLOY_WEBHOOK_URL must use https://"),
+              (bool(parsed.hostname), "DEPLOY_WEBHOOK_URL must include a host name"),
+              (
+                  not parsed.username and not parsed.password,
+                  "DEPLOY_WEBHOOK_URL must not contain credentials",
+              ),
+              (
+                  parsed.path == "/hooks/ai-ops-agent-update",
+                  "DEPLOY_WEBHOOK_URL path must be /hooks/ai-ops-agent-update",
+              ),
+              (
+                  not parsed.query and not parsed.fragment,
+                  "DEPLOY_WEBHOOK_URL must not contain a query string; "
+                  "the secret goes in DEPLOY_WEBHOOK_TOKEN",
+              ),
+              (bool(token), "DEPLOY_WEBHOOK_TOKEN is empty"),
           ]
 
           errors = [message for ok, message in checks if not ok]
@@ -36,11 +50,22 @@ jobs:
                   print(f"::error::{message}")
               sys.exit(1)
 
-          print("DEPLOY_WEBHOOK_URL format OK")
+          print("Deploy webhook settings OK")
         env:
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
 
       - name: Call deploy webhook
-        run: curl --fail --show-error --silent -X POST "$DEPLOY_WEBHOOK_URL"
+        # --proto/--proto-redir refuse plain HTTP, including on redirects;
+        # --max-redirs 0 turns any redirect into a failure instead of a retry.
+        run: |
+          echo "::add-mask::$DEPLOY_WEBHOOK_TOKEN"
+          curl --fail --show-error --silent \
+            --location --max-redirs 0 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            -X POST \
+            -H "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+            "$DEPLOY_WEBHOOK_URL"
         env:
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}

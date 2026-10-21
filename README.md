@@ -82,17 +82,101 @@ GitHub Actions workflow:
 .github/workflows/deploy.yml
 ```
 
-Required GitHub Actions secret:
+Required GitHub Actions secrets:
 
 ```text
-DEPLOY_WEBHOOK_URL
+DEPLOY_WEBHOOK_URL    https://<deploy-host>/hooks/ai-ops-agent-update
+DEPLOY_WEBHOOK_TOKEN  <webhook-secret>
 ```
 
-Expected value format:
+The webhook is served over TLS only. The workflow fails before calling anything
+if `DEPLOY_WEBHOOK_URL` is not `https://`, contains credentials, or has a query
+string. The token is sent as an `Authorization` header, never in the URL, and
+curl refuses plain HTTP and does not follow redirects (`--proto =https`,
+`--proto-redir =https`, `--max-redirs 0`). The `Call deploy webhook` step is
+therefore equivalent to:
 
-```text
-http://161.35.17.201:9000/hooks/ai-ops-agent-update?secret=<webhook-secret>
+```bash
+curl --fail --show-error --silent -X POST \
+  -H "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+  https://<deploy-host>/hooks/ai-ops-agent-update
 ```
+
+`<deploy-host>` must be a DNS name that the certificate covers. The default
+certbot flow issues certificates for names, not bare IP addresses.
+
+### TLS endpoint (server, owner-run)
+
+The webhook listens on port 9000 without TLS today. Put a TLS reverse proxy in
+front of it and keep the webhook itself on loopback:
+
+1. Point a DNS name at `161.35.17.201`.
+2. Obtain a certificate for it, for example with certbot's standalone or
+   webroot plugin, and proxy `443` to the webhook on `127.0.0.1:9000`.
+3. Close public access to port 9000 once the proxy works (firewall rule).
+4. Check the endpoint from a machine outside the server. This request has no
+   token, so it must be refused and does not trigger a deploy:
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+     https://<deploy-host>/hooks/ai-ops-agent-update
+   ```
+
+   Expect `401` over a valid certificate. A certificate error means the proxy
+   or certificate is wrong; do not switch the workflow until this passes.
+
+**Certificate renewal:** certbot renews through its systemd timer. Its renewal
+hook must reload the proxy so the new certificate is served, for example
+`systemctl reload nginx`. Confirm with `certbot renew --dry-run` and check the
+expiry date with `certbot certificates` after each renewal.
+
+### Webhook hook (server)
+
+The hook `ai-ops-agent-update` in `/etc/webhook.conf` must accept the
+`Authorization` header rule (the header value is `Bearer <webhook-secret>`).
+Remove the old `secret` query-parameter rule once the workflow has switched.
+Example rule (adjust to the existing hook definition):
+
+```json
+"trigger-rule": {
+  "match": {
+    "type": "value",
+    "value": "Bearer <webhook-secret>",
+    "parameter": { "source": "header", "name": "Authorization" }
+  }
+}
+```
+
+### Migration from the query-string secret
+
+The old URL form put the secret in the query string, where it can appear in
+logs, shell history and proxy access logs. Treat that value as exposed. Migrate
+in this order and do not skip a step:
+
+1. **Deploy the TLS endpoint first.** Set up the proxy and certificate above.
+   Keep the old `secret` query rule and add the header rule so both forms
+   work during the overlap.
+2. **Switch the workflow.** Before the switch, confirm the service is healthy
+   (`systemctl status ai-ops-agent.service --no-pager`) and not restarting. Then
+   set `DEPLOY_WEBHOOK_URL` to the `https://<deploy-host>/hooks/ai-ops-agent-update`
+   base URL, add `DEPLOY_WEBHOOK_TOKEN` with the current secret value, and merge.
+   Confirm the next deploy succeeds and the update log shows it ran.
+3. **Rotate the secret.** Generate a new value (`openssl rand -hex 32`), set it
+   as `DEPLOY_WEBHOOK_TOKEN` in GitHub, and update the header rule in
+   `/etc/webhook.conf`. Remove the old query rule, then reload the hook service.
+4. **Confirm the old value is rejected.** Using the old value, expect `401`
+   (any non-2xx means it no longer deploys):
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+     -H "Authorization: Bearer <old-secret>" \
+     https://<deploy-host>/hooks/ai-ops-agent-update
+   ```
+
+   Then confirm a deploy with the new value succeeds.
+
+Steps 2–4 change live server and GitHub state. Run them through the owner's
+Ops controls or an administrator, not from a coding run.
 
 Server files:
 

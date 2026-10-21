@@ -31,3 +31,4 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     secrets:
       DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+      DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
