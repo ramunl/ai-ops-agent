@@ -15,6 +15,33 @@ import pytest
 
 from ai_ops_agent import config, package_updates, telegram_bot
 from ai_ops_agent.bot import agents, packages, services
+from ai_ops_agent.command_output import command_failed
+
+
+@pytest.mark.parametrize("code", [0, 1, 2, -15])
+def test_silent_command_failure_depends_on_exit_code(monkeypatch, code):
+    from ai_ops_agent import shell
+
+    proc = Mock(returncode=code)
+    proc.communicate.return_value = ("", "")
+    monkeypatch.setattr(shell.subprocess, "Popen", Mock(return_value=proc))
+
+    result = shell.run(["command"])
+
+    assert result == f"(exit {code})"
+    assert command_failed(result) is (code != 0)
+
+
+@pytest.mark.parametrize("result", ["(exit 1)", "Command timed out after 7s"])
+def test_restart_failure_stops_before_polling(result, chat, monkeypatch):
+    command = AsyncMock(return_value=result)
+    monkeypatch.setattr(services, "run_command", command)
+    service = config.MANAGED_SERVICES[0]
+
+    asyncio.run(services.restart(chat, SimpleNamespace(args=[service])))
+
+    command.assert_awaited_once_with(["systemctl", "restart", service])
+    assert "Restart failed" in chat.message.reply_text.await_args.args[0]
 
 
 @pytest.mark.parametrize(
@@ -505,7 +532,9 @@ def test_shell_timeout_cleanup_is_bounded_and_preserves_failure(
     monkeypatch.setattr(shell.subprocess, "Popen", launch)
     monkeypatch.setattr(shell.os, "killpg", killpg)
 
-    assert shell.run(["command"], timeout=7) == "Command timed out after 7s"
+    result = shell.run(["command"], timeout=7)
+    assert result == "Command timed out after 7s"
+    assert command_failed(result)
 
     assert launch.call_args.kwargs["start_new_session"] is True
     killpg.assert_called_once_with(proc.pid, signal.SIGKILL)

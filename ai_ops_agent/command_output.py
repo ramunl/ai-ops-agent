@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from ai_ops_agent.shell import run
@@ -22,4 +23,7 @@ def strip_exit_prefix(raw: str) -> str:
 
 def command_failed(output: str) -> bool:
     """Recognize process errors and timeouts in command output."""
+    # Silent commands carry their exit code instead of output text.
+    if match := re.fullmatch(r"\(exit (-?\d+)\)", output):
+        return int(match.group(1)) != 0
     return output.startswith(("[exit", "Error:", "Command timed out"))
