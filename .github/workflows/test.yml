@@ -24,3 +24,10 @@ jobs:
           ruff format --check ai_ops_agent tests
       - name: Run regression tests
         run: python -m pytest -q
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    secrets:
+      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}

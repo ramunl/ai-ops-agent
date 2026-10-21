@@ -1,9 +1,10 @@
 name: Deploy AI Ops Agent
 
 on:
-  push:
-    branches:
-      - main
+  workflow_call:
+    secrets:
+      DEPLOY_WEBHOOK_URL:
+        required: true
 
 jobs:
   deploy:
