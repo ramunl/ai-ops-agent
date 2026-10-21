@@ -54,7 +54,11 @@ def restore(target: Target, source: Path) -> None:
     temporary = target.venv.with_name(f"{target.venv.name}.ai-deploy-restore")
     shutil.rmtree(temporary, ignore_errors=True)
     shutil.copytree(source / "venv", temporary, symlinks=True)
-    shutil.rmtree(target.venv)
+    try:
+        shutil.rmtree(target.venv)
+    except FileNotFoundError:
+        # A previous restore may have stopped between removal and rename.
+        pass
     temporary.rename(target.venv)
     for index, entry in enumerate(entries):
         path = Path(entry["path"])

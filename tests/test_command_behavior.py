@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from ai_ops_agent import config, telegram_bot
+from ai_ops_agent import config, package_updates, telegram_bot
 from ai_ops_agent.bot import agents, packages, services
 
 
@@ -103,12 +103,94 @@ def test_update_stops_when_refresh_fails(chat, monkeypatch):
     assert "apt-get update failed" in chat.message.reply_text.await_args.args[0]
 
 
-def test_upgrade_timeout_is_reported_as_failure(chat, monkeypatch):
-    monkeypatch.setattr(
-        packages, "run_command", AsyncMock(return_value="Command timed out after 900s")
-    )
+@pytest.fixture
+def upgrade_environment(tmp_path, monkeypatch):
+    """Fake the systemd start and the package lock; apt-get must never run here."""
+    lock = tmp_path / "ai-packages.lock"
+    monkeypatch.setattr(package_updates, "LOCK", lock)
+    command = Mock(return_value=(0, ""))
+    monkeypatch.setattr(package_updates, "run_command", command)
+    legacy = AsyncMock(side_effect=AssertionError("apt-get ran in the bot process"))
+    monkeypatch.setattr(packages, "run_command", legacy)
+    return SimpleNamespace(lock=lock, command=command, legacy=legacy)
+
+
+def test_upgrade_starts_detached_unit_without_direct_apt(upgrade_environment, chat):
     asyncio.run(packages.upgrade(chat, SimpleNamespace(args=[])))
-    assert "Upgrade failed" in chat.message.reply_text.await_args.args[0]
+    upgrade_environment.legacy.assert_not_awaited()
+    upgrade_environment.command.assert_called_once()
+    args, timeout = upgrade_environment.command.call_args.args
+    assert args == package_updates.start_command(upgrade_environment.lock)
+    assert args[0] == "systemd-run"
+    assert "--setenv=DEBIAN_FRONTEND=noninteractive" in args
+    assert "--setenv=LC_ALL=C" in args
+    assert timeout == package_updates.START_TIMEOUT
+    text = chat.message.reply_text.await_args.args[0]
+    assert "ai-packages-upgrade.service" in text
+    assert chat.message.reply_text.await_count == 1
+
+
+def test_upgrade_start_failure_is_never_reported_as_started(upgrade_environment, chat):
+    upgrade_environment.command.return_value = (124, "systemd-run: timed out after 30 s")
+    asyncio.run(packages.upgrade(chat, SimpleNamespace(args=[])))
+    text = chat.message.reply_text.await_args.args[0]
+    assert "Upgrade not started" in text
+    assert "timed out after 30 s" in text
+    assert "Upgrade started" not in text
+
+
+def test_second_upgrade_is_rejected_while_lock_held(upgrade_environment, chat):
+    with upgrade_environment.lock.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        asyncio.run(packages.upgrade(chat, SimpleNamespace(args=[])))
+    text = chat.message.reply_text.await_args.args[0]
+    assert "Upgrade not started" in text
+    assert "a package run is already active" in text
+    upgrade_environment.command.assert_not_called()
+    upgrade_environment.legacy.assert_not_awaited()
+
+
+def test_upgrade_can_start_again_once_lock_is_released(upgrade_environment, chat):
+    with upgrade_environment.lock.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    # The lock is released by the kernel when its holder exits, so a crashed
+    # run cannot leave upgrades blocked.
+    asyncio.run(packages.upgrade(chat, SimpleNamespace(args=[])))
+    upgrade_environment.command.assert_called_once()
+    assert "ai-packages-upgrade.service" in chat.message.reply_text.await_args.args[0]
+
+
+def test_ops_restart_mid_upgrade_leaves_detached_unit_running(
+    upgrade_environment, chat
+):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def run(args, timeout):
+        entered.set()
+        release.wait(5)
+        return 0, ""
+
+    upgrade_environment.command.side_effect = run
+
+    async def restart_ops():
+        task = asyncio.create_task(packages.upgrade(chat, SimpleNamespace(args=[])))
+        for _ in range(500):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        # What an Ops restart does to the bot's handler tasks.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+
+    asyncio.run(restart_ops())
+    assert entered.is_set()
+    calls = [call.args[0] for call in upgrade_environment.command.call_args_list]
+    assert calls == [package_updates.start_command(upgrade_environment.lock)]
+    assert all(args[0] == "systemd-run" for args in calls)
+    chat.message.reply_text.assert_not_awaited()
 
 
 def test_self_update_only_queues_manager_operation(chat, monkeypatch):

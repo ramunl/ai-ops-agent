@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ai_ops_agent.cleanup import Runner, exclusive, run_command
 from ai_ops_agent.packages import group_updates
+from ai_ops_agent.service_control import is_locked
 
 LOCK = Path("/run/ai-packages.lock")
 LOG = Path("/var/log/ai-packages.log")
@@ -26,6 +27,8 @@ REBOOT_FLAG = Path("/var/run/reboot-required")
 REFRESH_TIMEOUT = 300
 LIST_TIMEOUT = 120
 UPGRADE_TIMEOUT = 900
+START_TIMEOUT = 30
+UNIT = "ai-packages-upgrade"
 # Keep the installed configuration files instead of stopping to ask.
 APT_UPGRADE = [
     "apt-get",
@@ -44,7 +47,7 @@ DETACHED = [
     "--quiet",
     "--wait",
     "--collect",
-    "--unit=ai-packages-upgrade",
+    f"--unit={UNIT}",
     "--setenv=DEBIAN_FRONTEND=noninteractive",
     "--setenv=LC_ALL=C",
 ]
@@ -124,6 +127,47 @@ def upgrade(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
         "remaining": left.get("total", 0),
         "reboot_required": reboot_flag.exists(),
     }
+
+
+def start_command(lock: Path) -> list[str]:
+    """The bot's start: the upgrade unit, returning at once instead of waiting.
+
+    The unit takes ``lock`` itself (``flock -n`` fails at once if it is held),
+    so the lock is held while apt runs and released when the unit exits, even
+    if the bot is restarted. The bot never runs apt-get in its own process.
+    """
+    return [
+        "systemd-run",
+        "--quiet",
+        "--collect",
+        f"--unit={UNIT}",
+        "--setenv=DEBIAN_FRONTEND=noninteractive",
+        "--setenv=LC_ALL=C",
+        "flock",
+        "-n",
+        str(lock),
+        *APT_UPGRADE,
+    ]
+
+
+def start_upgrade(run: Runner | None = None, lock: Path | None = None) -> dict:
+    """Start the upgrade in its detached unit and return without waiting for apt.
+
+    Returns ``{"ok": True, "unit": ...}`` once systemd has the unit, or a
+    ``busy`` result while another package run holds the lock. The lock is
+    checked first so a second start is refused without running systemd-run.
+    """
+    run = run or run_command
+    lock = lock or LOCK
+    if is_locked(lock):
+        return {"ok": False, "busy": True, "error": "a package run is already active"}
+    code, out = run(start_command(lock), START_TIMEOUT)
+    if code != 0:
+        return {
+            "ok": False,
+            "error": _tail(out) or f"systemd-run exited with {code}",
+        }
+    return {"ok": True, "unit": f"{UNIT}.service"}
 
 
 def _log(log: Path, mode: str, result: dict) -> None:

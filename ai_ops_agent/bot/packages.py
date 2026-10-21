@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from ai_ops_agent import package_updates
 from ai_ops_agent.bot.package_reports import reply_update_report
 from ai_ops_agent.bot.transport import is_authorized, reply, reply_expandable
 from ai_ops_agent.command_output import command_failed, run_command
@@ -27,18 +30,21 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Upgrade system packages and summarize command success or failure."""
+    """Start the protected package upgrade in its own unit and report the start.
+
+    apt runs in the detached unit, so the reply only says whether the unit was
+    started or why it was not; progress is in its journal (ai-packages-upgrade).
+    """
     if not is_authorized(update):
         return
-    await reply(update, "⬆️ Upgrading packages, this may take a while...")
-    output = await run_command(["apt-get", "upgrade", "-y", "-q"], timeout=900)
-    failed = command_failed(output)
-    if failed:
-        # Show the beginning (where errors appear) + tail
-        summary = (
-            output[:1500] + "\n...\n" + output[-500:] if len(output) > 2000 else output
-        )
-        await reply_expandable(update, "❌ Upgrade failed", summary)
+    result = await asyncio.to_thread(package_updates.start_upgrade)
+    if result.get("ok"):
+        await reply(update, f"⬆️ Upgrade started: {result['unit']}")
+    elif result.get("busy"):
+        await reply(update, f"⏳ Upgrade not started: {result['error']}")
     else:
-        tail = output[-2000:] if len(output) > 2000 else output
-        await reply_expandable(update, "✅ Upgrade complete", tail)
+        await reply_expandable(
+            update,
+            "❌ Upgrade not started",
+            result.get("error") or "systemd-run did not start the upgrade.",
+        )
