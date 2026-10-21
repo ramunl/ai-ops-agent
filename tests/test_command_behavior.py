@@ -131,7 +131,10 @@ def test_upgrade_starts_detached_unit_without_direct_apt(upgrade_environment, ch
 
 
 def test_upgrade_start_failure_is_never_reported_as_started(upgrade_environment, chat):
-    upgrade_environment.command.return_value = (124, "systemd-run: timed out after 30 s")
+    upgrade_environment.command.return_value = (
+        124,
+        "systemd-run: timed out after 30 s",
+    )
     asyncio.run(packages.upgrade(chat, SimpleNamespace(args=[])))
     text = chat.message.reply_text.await_args.args[0]
     assert "Upgrade not started" in text
