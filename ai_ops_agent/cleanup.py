@@ -15,6 +15,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,10 @@ JOURNAL_MAX_BYTES = 200 * 1024**2
 LARGEST_COUNT = 10
 DU_TIMEOUT = 180
 STEP_TIMEOUT = 600
+# Python's tempfile names: "tmp" and 8 characters. Left behind by test runs
+# (the agents run test suites) and crashed programs; removed after a day.
+TEMP_NAME = re.compile(r"^tmp[a-z0-9_]{8}$")
+TEMP_MIN_AGE = 24 * 3600
 
 Runner = Callable[[list[str], int], tuple[int, str]]
 
@@ -61,6 +66,9 @@ class Paths:
     journal: Path = Path("/var/log/journal")
     snaps: Path = Path("/var/lib/snapd/snaps")
     caches: tuple[Path, ...] = (Path("/root/.cache/pip"), Path("/root/.npm/_cacache"))
+    tmp: Path = Path("/tmp")
+    # Codex keeps every auto-updated release here; "current" names the one in use.
+    codex: Path = Path("/root/.codex/packages/app-server-daemon")
     lock: Path = Path("/run/lock/ai-cleanup.lock")
     log: Path = Path("/var/log/ai-cleanup.log")
 
@@ -157,6 +165,38 @@ def largest_directories(run: Runner, root: Path) -> list[dict]:
     return leaves[:LARGEST_COUNT]
 
 
+def stale_temp_dirs(tmp: Path, now: float | None = None) -> list[Path]:
+    """Top-level tempfile directories in tmp untouched for over a day."""
+    now = time.time() if now is None else now
+    stale = []
+    with contextlib.suppress(OSError):
+        for entry in tmp.iterdir():
+            if not TEMP_NAME.match(entry.name) or entry.is_symlink():
+                continue
+            with contextlib.suppress(OSError):
+                if entry.is_dir() and now - entry.stat().st_mtime > TEMP_MIN_AGE:
+                    stale.append(entry)
+    return sorted(stale)
+
+
+def old_codex_releases(codex: Path) -> list[Path]:
+    """Codex releases other than the one in use and the newest one.
+
+    Nothing is offered when the release in use can't be told for sure.
+    """
+    releases = codex / "releases"
+    try:
+        current = (codex / "current").resolve(strict=True)
+        candidates = [entry for entry in releases.iterdir() if entry.is_dir()]
+    except OSError:
+        return []
+    if current.parent != releases.resolve():
+        return []
+    newest = max(candidates, key=lambda entry: entry.stat().st_mtime, default=None)
+    keep = {current, newest.resolve() if newest else current}
+    return sorted(entry for entry in candidates if entry.resolve() not in keep)
+
+
 def measure(run: Runner, paths: Paths) -> list[Category]:
     """Size every cleanable category without changing anything."""
     packages = unused_packages(run)
@@ -168,6 +208,8 @@ def measure(run: Runner, paths: Paths) -> list[Category]:
         dir_size(paths.snaps / f"{name}_{revision}.snap") for name, revision in snaps
     )
     cache_bytes = sum(dir_size(cache) for cache in paths.caches)
+    temps = stale_temp_dirs(paths.tmp)
+    releases = old_codex_releases(paths.codex)
     return [
         Category(
             "packages",
@@ -195,6 +237,21 @@ def measure(run: Runner, paths: Paths) -> list[Category]:
             "pip and npm caches",
             cache_bytes,
             ", ".join(str(cache) for cache in paths.caches),
+        ),
+        Category(
+            "tmp",
+            "Leftover temporary folders",
+            sum(dir_size(entry) for entry in temps),
+            f"{len(temps)} tmp* folders in {paths.tmp} untouched for over a day "
+            "(often left by test runs)",
+            [str(entry) for entry in temps[:LARGEST_COUNT]],
+        ),
+        Category(
+            "codex",
+            "Old Codex releases",
+            sum(dir_size(entry) for entry in releases),
+            f"{len(releases)} old releases; the one in use and the newest are kept",
+            [entry.name for entry in releases],
         ),
     ]
 
@@ -258,11 +315,31 @@ def cleanup_steps(run: Runner, paths: Paths) -> list[tuple[str, str, Callable]]:
             return 0, "no disabled revisions"
         return max(code for code, _ in results), "\n".join(out for _, out in results)
 
+    def remove_all(found: list[Path]) -> tuple[int, str]:
+        errors = []
+        for entry in found:
+            try:
+                shutil.rmtree(entry)
+            except OSError as error:
+                errors.append(f"{entry}: {error}")
+        message = f"removed {len(found) - len(errors)} of {len(found)}"
+        return int(bool(errors)), "\n".join([message, *errors[:3]])
+
     return [
         ("packages", "Unused packages and apt cache", packages),
         ("journal", "Old system logs", journal),
         ("snaps", "Old snap revisions", snaps),
         ("caches", "pip and npm caches", lambda: _remove_caches(paths)),
+        (
+            "tmp",
+            "Leftover temporary folders",
+            lambda: remove_all(stale_temp_dirs(paths.tmp)),
+        ),
+        (
+            "codex",
+            "Old Codex releases",
+            lambda: remove_all(old_codex_releases(paths.codex)),
+        ),
     ]
 
 

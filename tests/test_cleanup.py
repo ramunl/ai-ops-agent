@@ -1,7 +1,8 @@
 """Disk cleanup: measuring, cleaning, and the guards around them."""
 
 import json
-import tempfile
+import os
+import time
 from collections import namedtuple
 from pathlib import Path
 from unittest.mock import patch
@@ -53,11 +54,9 @@ def _paths(tmp: Path) -> Paths:
         caches=(tmp / "pip", tmp / "npm"),
         lock=tmp / "lock",
         log=tmp / "cleanup.log",
+        tmp=tmp / "tmpdir",
+        codex=tmp / "codex",
     )
-
-
-def _tmp() -> Path:
-    return Path(tempfile.mkdtemp())
 
 
 # ---------------------------------------------------------------- parsing
@@ -109,11 +108,13 @@ def test_largest_directories_lists_culprits_not_their_parents():
 # ---------------------------------------------------------------- measuring
 
 
-def test_measure_sizes_each_category():
-    tmp = _tmp()
+def test_measure_sizes_each_category(tmp_path, monkeypatch):
+    tmp = tmp_path
     paths = _paths(tmp)
     _file(paths.apt_archives / "a.deb", 64 * 1024)
-    _file(paths.journal / "system.journal", 300 * 1024**2)
+    # A small stand-in for the 200 MB journal cap: no test writes 300 MB.
+    monkeypatch.setattr(cleanup, "JOURNAL_MAX_BYTES", 200 * 1024)
+    _file(paths.journal / "system.journal", 300 * 1024)
     _file(paths.snaps / "core20_2318.snap", 128 * 1024)
     _file(paths.caches[0] / "wheel", 256 * 1024)
     run = FakeRun(
@@ -128,14 +129,14 @@ def test_measure_sizes_each_category():
     assert by_id["packages"].bytes == 100 * 1024 + 64 * 1024
     assert "2 unused packages" in by_id["packages"].detail
     # Journal keeps up to 200 MB, so only the excess is reclaimable.
-    assert by_id["journal"].bytes == 100 * 1024**2
+    assert by_id["journal"].bytes == 100 * 1024
     assert by_id["snaps"].bytes == 128 * 1024
     assert by_id["snaps"].items == ["core20 rev 2318", "lxd rev 29351"]
     assert by_id["caches"].bytes == 256 * 1024
 
 
-def test_report_is_json_with_total():
-    tmp = _tmp()
+def test_report_is_json_with_total(tmp_path):
+    tmp = tmp_path
     result = cleanup.report(FakeRun(), _paths(tmp))
     json.dumps(result)
     assert result["ok"] is True
@@ -145,6 +146,8 @@ def test_report_is_json_with_total():
         "journal",
         "snaps",
         "caches",
+        "tmp",
+        "codex",
     ]
 
 
@@ -154,13 +157,14 @@ def test_report_is_json_with_total():
 Usage = namedtuple("Usage", "total used free")
 
 
-def test_clean_runs_fixed_steps_in_order_and_measures_freed_space():
-    tmp = _tmp()
+def test_clean_runs_fixed_steps_in_order_and_measures_freed_space(tmp_path):
+    tmp = tmp_path
     paths = _paths(tmp)
     _file(paths.caches[0] / "wheel", 4096)
     run = FakeRun({"snap list": (0, SNAP_LIST)})
     used = iter(
-        [10_000, 10_000, 9_000, 9_000, 8_500, 8_500, 8_500, 8_500, 8_000, 8_000]
+        [10_000, 10_000, 9_000, 9_000, 8_500, 8_500, 8_500, 8_500, 8_000]
+        + [8_000, 8_000, 8_000, 8_000, 8_000]
     )
     with patch.object(
         cleanup.shutil, "disk_usage", side_effect=lambda _p: Usage(0, next(used), 0)
@@ -176,19 +180,74 @@ def test_clean_runs_fixed_steps_in_order_and_measures_freed_space():
         ["snap", "remove"],
     ]
     assert run.calls[4] == ["snap", "remove", "core20", "--revision=2318"]
-    assert [step["freed_bytes"] for step in result["steps"]] == [1000, 500, 0, 500]
+    assert [step["freed_bytes"] for step in result["steps"]] == [
+        1000,
+        500,
+        0,
+        500,
+        0,
+        0,
+    ]
     assert result["freed_bytes"] == 2000
     assert result["ok"] is True
     assert not paths.caches[0].exists()
 
 
-def test_a_failing_step_does_not_stop_the_others():
-    tmp = _tmp()
+def test_a_failing_step_does_not_stop_the_others(tmp_path):
+    tmp = tmp_path
     run = FakeRun({"journalctl": (1, "Failed to vacuum")})
     result = cleanup.clean(run, _paths(tmp))
     assert result["ok"] is False
-    assert [step["ok"] for step in result["steps"]] == [True, False, True, True]
+    assert [step["ok"] for step in result["steps"]] == [
+        True,
+        False,
+        True,
+        True,
+        True,
+        True,
+    ]
     assert "Failed to vacuum" in result["steps"][1]["message"]
+
+
+def _age(path: Path, seconds: float) -> None:
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_old_temporary_folders_are_measured_and_removed(tmp_path):
+    paths = _paths(tmp_path)
+    old = paths.tmp / "tmpab12cd_9"
+    _file(old / "journal" / "system.journal", 64 * 1024)
+    _age(old, 2 * 86400)
+    fresh = paths.tmp / "tmpzz99yy00"
+    _file(fresh / "x", 4096)  # a test running right now
+    other = paths.tmp / "keep-me-old"
+    _file(other / "x", 4096)
+    _age(other, 2 * 86400)
+    by_id = {category.id: category for category in cleanup.measure(FakeRun(), paths)}
+    assert by_id["tmp"].bytes >= 64 * 1024
+    assert by_id["tmp"].items == [str(old)]
+    cleanup.clean(FakeRun(), paths)
+    assert not old.exists() and fresh.exists() and other.exists()
+
+
+def test_old_codex_releases_keep_the_current_and_the_newest(tmp_path):
+    paths = _paths(tmp_path)
+    releases = paths.codex / "releases"
+    for age, name in ((5, "0.157.1"), (4, "0.160.0"), (3, "0.162.1"), (1, "0.163.0")):
+        _file(releases / name / "codex", 4096)
+        _age(releases / name, age * 86400)
+    (paths.codex / "current").symlink_to(releases / "0.162.1")
+    by_id = {category.id: category for category in cleanup.measure(FakeRun(), paths)}
+    assert by_id["codex"].items == ["0.157.1", "0.160.0"]
+    cleanup.clean(FakeRun(), paths)
+    assert sorted(p.name for p in releases.iterdir()) == ["0.162.1", "0.163.0"]
+
+
+def test_codex_releases_are_left_alone_without_a_current_link(tmp_path):
+    paths = _paths(tmp_path)
+    _file(paths.codex / "releases" / "0.1.0" / "codex", 4096)
+    assert cleanup.old_codex_releases(paths.codex) == []
 
 
 # ---------------------------------------------------------------- guards
@@ -199,14 +258,14 @@ def test_main_rejects_unknown_mode(capsys):
     assert "usage" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_main_requires_root(capsys):
+def test_main_requires_root(capsys, tmp_path):
     with patch.object(cleanup.os, "geteuid", return_value=1000):
-        assert cleanup.main(["run"], FakeRun(), _paths(_tmp())) == 1
+        assert cleanup.main(["run"], FakeRun(), _paths(tmp_path)) == 1
     assert "root" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_only_one_cleanup_at_a_time(capsys):
-    paths = _paths(_tmp())
+def test_only_one_cleanup_at_a_time(capsys, tmp_path):
+    paths = _paths(tmp_path)
     with (
         patch.object(cleanup.os, "geteuid", return_value=0),
         cleanup.exclusive(paths.lock),
@@ -215,8 +274,8 @@ def test_only_one_cleanup_at_a_time(capsys):
     assert "already running" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_run_logs_and_prints_result(capsys):
-    paths = _paths(_tmp())
+def test_run_logs_and_prints_result(capsys, tmp_path):
+    paths = _paths(tmp_path)
     with patch.object(cleanup.os, "geteuid", return_value=0):
         assert cleanup.main(["run"], FakeRun(), paths) == 0
     result = json.loads(capsys.readouterr().out)
@@ -224,8 +283,8 @@ def test_run_logs_and_prints_result(capsys):
     assert "cleanup freed" in paths.log.read_text()
 
 
-def test_cache_failure_is_reported_and_other_caches_are_attempted():
-    paths = _paths(_tmp())
+def test_cache_failure_is_reported_and_other_caches_are_attempted(tmp_path):
+    paths = _paths(tmp_path)
     for cache in paths.caches:
         _file(cache / "entry", 4096)
     with patch.object(

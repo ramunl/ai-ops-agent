@@ -260,6 +260,8 @@ mode, so no command or path ever comes from a caller:
 | Old system logs | `journalctl --vacuum-time=7d --vacuum-size=200M` |
 | Old snap revisions | removes revisions marked `disabled` in `snap list --all` |
 | pip and npm caches | deletes `/root/.cache/pip` and `/root/.npm/_cacache` |
+| Leftover temporary folders | deletes `/tmp/tmp*` folders (Python temp dirs, often left by test runs) untouched for over a day |
+| Old Codex releases | deletes `/root/.codex/packages/app-server-daemon/releases/*` except the one `current` points to and the newest; nothing if `current` can't be read |
 
 Freed space is measured before and after each step. Runs are logged to
 `/var/log/ai-cleanup.log`. `report` also lists the largest directories (two
