@@ -9,7 +9,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ai_ops_agent import config
+from ai_ops_agent import config, service_control
 from ai_ops_agent.bot.transport import (
     is_authorized,
     reply,
@@ -147,10 +147,14 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def reboot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Request a system reboot after checking the owner chat."""
+    """Queue a guarded system reboot after checking the owner chat."""
     if not is_authorized(update):
         return
-    await reply(update, "🔁 Rebooting the whole system now...")
-    result = await run_command(["systemctl", "reboot"], timeout=15)
-    if command_failed(result):
-        await reply_expandable(update, "⚠️ Reboot failed", result)
+    result = await asyncio.to_thread(service_control.reboot)
+    if result.get("ok") and result.get("queued"):
+        await reply(update, "🔁 Reboot queued — scheduled in 5 seconds.")
+        return
+    header = "⚠️ Reboot refused" if result.get("busy") else "⚠️ Reboot failed"
+    await reply_expandable(
+        update, header, result.get("error") or "Reboot was not queued."
+    )

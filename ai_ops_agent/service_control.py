@@ -29,6 +29,7 @@ from pathlib import Path
 from ai_ops_agent.services_list import MANAGED_SERVICES
 
 LOG = "/var/log/ai-service.log"
+DEPLOYMENT_STATE = Path("/var/lib/ai-deploy/state.json")
 USAGE = "usage: ai-service list|restart <service>|reboot"
 # Work a reboot must not interrupt, by the lock each one holds while running.
 BUSY_LOCKS = {
@@ -79,14 +80,17 @@ def is_locked(path: Path) -> bool:
 
 
 def reboot(run: Runner = run_command, locks: dict[Path, str] | None = None) -> dict:
-    """Queue a reboot of the server unless protected work is running."""
+    """Queue a reboot unless protected work is running when checked.
+
+    These checks do not prevent new work starting after the check.
+    """
     locks = BUSY_LOCKS if locks is None else locks
     busy = [what for path, what in locks.items() if is_locked(path)]
     if busy:
         return {"ok": False, "busy": True, "error": f"{busy[0]} is running"}
     if locks == BUSY_LOCKS:
         try:
-            state_path = Path("/var/lib/ai-deploy/state.json")
+            state_path = DEPLOYMENT_STATE
             if state_path.exists() and json.loads(state_path.read_text()).get("active"):
                 return {"ok": False, "busy": True, "error": "a deployment is running"}
         except (OSError, ValueError, AttributeError):
