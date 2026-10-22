@@ -19,7 +19,11 @@ from ai_ops_agent.bot.backup import backup_cmd, backup_forever
 from ai_ops_agent.bot.catalog import BOT_COMMANDS
 from ai_ops_agent.bot.help import core, start, version
 from ai_ops_agent.bot.packages import update_cmd, upgrade
-from ai_ops_agent.bot.security import audit_forever, security_cmd
+from ai_ops_agent.bot.security import (
+    audit_forever,
+    login_watch_forever,
+    security_cmd,
+)
 from ai_ops_agent.bot.services import errors, logs, reboot, restart, services
 from ai_ops_agent.bot.system import disk, health, memory, uptime
 
@@ -41,6 +45,9 @@ async def on_start(application: Application) -> None:
     )
     application.bot_data["audit_task"] = asyncio.get_running_loop().create_task(
         audit_forever(application)
+    )
+    application.bot_data["login_task"] = asyncio.get_running_loop().create_task(
+        login_watch_forever(application)
     )
 
 

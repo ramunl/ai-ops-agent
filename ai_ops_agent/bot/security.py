@@ -16,7 +16,7 @@ from typing import Any
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
-from ai_ops_agent import config
+from ai_ops_agent import config, login_watch, security_stats
 from ai_ops_agent.bot.backup import seconds_until
 from ai_ops_agent.bot.transport import is_authorized, reply
 from ai_ops_agent.command_output import run_command, strip_exit_prefix
@@ -147,3 +147,15 @@ async def audit_forever(application: Application, hour: int = AUDIT_HOUR) -> Non
             await send_report(application.bot, config.AUTHORIZED_CHAT_ID)
         except Exception as error:  # tomorrow's report must still run
             logger.warning("Daily security report failed: %s", error)
+
+
+async def login_watch_forever(application: Application) -> None:
+    """Every minute, send new SSH logins to the owner (see login_watch)."""
+    while True:
+        try:
+            alerts = await asyncio.to_thread(login_watch.check, security_stats.run)
+            for text in alerts:
+                await application.bot.send_message(config.AUTHORIZED_CHAT_ID, text)
+        except Exception as error:  # the next check must still run
+            logger.warning("SSH login check failed: %s", error)
+        await asyncio.sleep(login_watch.CHECK_SECONDS)

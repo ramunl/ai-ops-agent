@@ -490,3 +490,13 @@ excluded. Multiplexed SSH channels count as one transport. Raw inbound TCP
 connections and source addresses are shown separately and can include login
 attempts. Live SSH settings supply the listening ports; missing process data
 is unavailable rather than zero. SSH checks themselves briefly add a connection.
+
+### SSH login alerts
+
+Every minute the bot reads sshd's journal and sends successful SSH logins to
+the owner's chat: a login from an address or with a key never seen before
+arrives at once as **⚠️ New SSH login** (user, address, time, method, key);
+logins from known addresses and keys stay quiet. The first run learns the last
+30 days without alerting. `OPS_LOGIN_ALERTS=all` sends every login, `off`
+none; known addresses and keys are kept in `/var/lib/ai-ops-agent/login-watch.json`
+(`OPS_LOGIN_STATE`).
