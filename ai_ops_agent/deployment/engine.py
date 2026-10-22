@@ -325,9 +325,15 @@ class Manager:
             record.update(
                 current=recovery["baseline"], status="failed", updated_at=timestamp()
             )
+            # A rollback's baseline is the release it left, not its predecessor.
+            restored = (
+                "previous version"
+                if job["action"] == "deploy"
+                else "pre-rollback release"
+            )
             record["error"] = (
                 record.get("error") or "Interrupted deployment"
-            ) + "; previous version restored and verified"
+            ) + f"; {restored} restored and verified"
             job.pop("recovery")
             # Commit restored verification before discarding its recovery bundle.
             self.store.write(state)
