@@ -11,11 +11,12 @@ from ai_ops_agent import audit, security_stats
 from ai_ops_agent.bot import security
 
 JOURNAL = """\
-Failed password for root from 203.0.113.5 port 4022 ssh2
-Failed password for invalid user admin from 203.0.113.5 port 4023 ssh2
-Invalid user oracle from 198.51.100.7 port 5000
-Failed password for root from 203.0.113.5 port 4024 ssh2
-Accepted publickey for roman from 192.0.2.10 port 51000 ssh2: ED25519 SHA256:x
+1792600001.000001 vps sshd[10]: Failed password for root from 203.0.113.5 port 4022 ssh2
+1792600002.000001 vps sshd[10]: Failed password for invalid user admin from 203.0.113.5 port 4023 ssh2
+1792600003.000001 vps sshd[11]: Invalid user oracle from 198.51.100.7 port 5000
+1792600004.000001 vps sshd[10]: Failed password for root from 203.0.113.5 port 4024 ssh2
+1792600005.000001 vps sshd[12]: Accepted publickey for roman from 192.0.2.10 port 51000 ssh2: ED25519 SHA256:abcdefghijklmnop
+1792600009.000001 vps sshd[13]: Accepted publickey for roman from 192.0.2.10 port 51002 ssh2: ED25519 SHA256:abcdefghijklmnop
 Accepted password for deploy from 192.0.2.11 port 51001 ssh2
 """
 F2B = "Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n"
@@ -64,10 +65,20 @@ def data(tmp_path):
 
 def test_ssh_attempts_are_counted_by_ip_and_user(data):
     ssh = data["ssh"]
-    assert (ssh["failed"], ssh["failed_ips"], ssh["accepted"]) == (4, 2, 2)
+    assert (ssh["failed"], ssh["failed_ips"], ssh["accepted"]) == (4, 2, 3)
     assert ssh["top_attackers"][0] == {"ip": "203.0.113.5", "count": 3}
     assert ssh["top_users"][0] == {"user": "root", "count": 2}
     assert ssh["password_logins"] == 1
+    assert ssh["login_groups"][0] == {
+        "user": "roman",
+        "from": "192.0.2.10",
+        "method": "publickey",
+        "key": "ED25519 …ijklmnop",
+        "count": 2,
+        "last": 1792600009.000001,
+    }
+    assert ssh["login_groups"][1]["user"] == "deploy"
+    assert ssh["login_groups"][1]["last"] is None  # a line without a time
 
 
 def test_bans_sessions_and_public_ports(data):
@@ -140,8 +151,9 @@ def test_report_message_has_stats_then_fixes(data):
     text = security.render(report)
     assert text.startswith("🛡 Security · ")
     assert (
-        "SSH, 24 h: 4 failed logins from 2 IPs · 2 successful (1 by password)" in text
+        "SSH, 24 h: 4 failed logins from 2 IPs · 3 successful (1 by password)" in text
     )
+    assert "✓ roman from 192.0.2.10 ×2 (publickey, key ED25519 …ijklmnop)" in text
     assert "Top attackers: 203.0.113.5 ×3, 198.51.100.7 ×1" in text
     assert "fail2ban: sshd 7 banned now, 145 in total" in text
     assert "Logged in now: 1 — roman from 192.0.2.10" in text

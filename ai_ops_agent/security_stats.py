@@ -26,8 +26,10 @@ _FAILED = re.compile(
     r"(?:invalid user )?(?P<user>\S+)|Invalid user (?P<invalid>\S+)) from " + _IP
 )
 _ACCEPTED = re.compile(
-    r"Accepted (?P<method>\S+) for (?P<user>\S+) from " + _IP + r" port"
+    r"Accepted (?P<method>\S+) for (?P<user>\S+) from " + _IP + r" port \d+"
+    r"(?: \S+: (?P<keytype>\S+) (?P<key>SHA256:\S+))?"
 )
+_STAMP = re.compile(r"^(\d{9,11}(?:\.\d+)?) ")
 _LOCAL = ("127.", "::1", "[::1]", "localhost")
 
 
@@ -54,7 +56,7 @@ def ssh_activity(run: Runner) -> dict:
             "--since",
             "24 hours ago",
             "-o",
-            "cat",
+            "short-unix",
             "--no-pager",
             "-q",
         ]
@@ -64,14 +66,32 @@ def ssh_activity(run: Runner) -> dict:
     attackers: Counter[str] = Counter()
     users: Counter[str] = Counter()
     accepted = []
+    groups: dict[tuple, dict] = {}
     for line in text.splitlines():
         if match := _FAILED.search(line):
             attackers[match["ip"]] += 1
             users[match["user"] or match["invalid"]] += 1
         elif match := _ACCEPTED.search(line):
+            stamp = _STAMP.match(line)
+            at = float(stamp.group(1)) if stamp else None
+            key = f"{match['keytype']} …{match['key'][-8:]}" if match["key"] else ""
             accepted.append(
                 {"user": match["user"], "from": match["ip"], "method": match["method"]}
             )
+            group = groups.setdefault(
+                (match["user"], match["ip"], match["method"], key),
+                {
+                    "user": match["user"][:32],
+                    "from": match["ip"],
+                    "method": match["method"][:32],
+                    "key": key,
+                    "count": 0,
+                    "last": None,
+                },
+            )
+            group["count"] += 1
+            if at is not None:
+                group["last"] = at
     return {
         "available": True,
         "failed": sum(attackers.values()),
@@ -87,6 +107,10 @@ def ssh_activity(run: Runner) -> dict:
         "accepted": len(accepted),
         "password_logins": sum(1 for item in accepted if item["method"] == "password"),
         "logins": accepted[-MAX_SESSIONS:],
+        # Who logged in: per user, address, method and key, most frequent first.
+        "login_groups": sorted(
+            groups.values(), key=lambda item: item["count"], reverse=True
+        )[:MAX_SESSIONS],
     }
 
 

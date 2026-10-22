@@ -52,6 +52,12 @@ def _stat_lines(stats: dict) -> list[str]:
                 else ""
             )
         )
+        for item in ssh.get("login_groups", []):
+            key = f", key {item['key']}" if item["key"] else ""
+            lines.append(
+                f"  ✓ {item['user']} from {item['from']} ×{item['count']} "
+                f"({item['method']}{key})"
+            )
         if ssh["top_attackers"]:
             lines.append(
                 "Top attackers: "
