@@ -62,3 +62,68 @@ tests cover command registration, owner rejection, service allowlists, package
 classification, resource parsing, metadata selection, update failures, and
 supervised deployment submission. System commands, package managers, network requests, and
 service restarts are mocked in the operation tests.
+
+## Package upgrade outcomes and dashboard handoff
+
+`ai-packages check|upgrade` retains its fixed arguments, one JSON document,
+exit convention (0 for `ok`, 1 for failure), and existing field names. Both
+CLI upgrades and the bot's asynchronous start launch a standard-library Python
+worker in `ai-packages-upgrade.service`. The launcher never runs apt directly.
+The worker owns `/run/ai-packages.lock` through apt exit and verification. A
+caller disappearing, or its wait expiring, does not stop the service or release
+the worker's lock. The apt deadline records `timeout` but deliberately waits for
+apt to exit, keeping the lock: it cannot safely assume dpkg descendants stopped.
+
+Before launch, a UUID reservation is atomically persisted under
+`/var/lib/ai-packages/active.json`, pointing to `<run_id>.json`. Outcome writes
+use atomic replacement and fsync. Completed run files remain available after
+caller loss. Each worker receives its specific run ID, refuses to execute a
+completed or superseded run, and writes only that run's evidence. An unresolved
+reservation blocks another upgrade even if the worker or caller died and the
+kernel released its lock. No automatic retry occurs. Recovery means inspecting
+that run file and the unit's state in Ops controls; do not clear the reservation
+until an administrator confirms apt/dpkg completion and reconciles the result.
+A failed or timed-out launcher may still have submitted a service, so its
+unresolved reservation is also retained conservatively.
+
+Upgrade JSON adds these independent facts:
+
+- `execution`: `queued`, `running`, `succeeded`, `launch_failed`, `apt_failed`,
+  `timeout`, or `unknown`. `completion_confirmed` becomes true only after apt
+  exit and the verification attempt. A caller wait timeout returns `unknown`
+  and `caller_timed_out: true` without changing the worker's durable outcome.
+- `apt_exit_code`: actual apt status, or null before confirmed exit.
+  `launcher_exit_code` and `launcher_error` describe systemd-run separately.
+  `diagnostics` contains at most 4096 characters from this run's apt output.
+  Journals are not used as outcome evidence, so unavailable or unrelated
+  journal entries cannot overwrite launcher errors or apt diagnostics.
+- `upgraded`: integer only when a successful apt exit has a parseable summary;
+  otherwise null. Apt's planned count is not a completed count on failure.
+- `verification`: `not_run`, `succeeded`, or `failed`, with separate
+  `verification_error`. Verification runs after confirmed apt exit, including
+  nonzero exit and completion following a deadline. `ok` requires successful
+  apt execution within its deadline and successful verification.
+- `remaining`: verified integer total, otherwise null. `remaining_packages`
+  contains `ok`, `total`, `security`, `stable`, `untested`, `checked_at`, and
+  `reboot_required`; failed queries have null totals/lists and an error.
+  Before verification the entire object is null. Names are observed remaining
+  packages, with no inferred explanation such as holds or phasing.
+- `started_at`, `worker_started_at`, `apt_finished_at`, `finished_at`, and
+  `checked_at` are Unix timestamps for reservation, worker start, apt exit,
+  completion of the verification attempt, and that attempt respectively.
+  Unobserved timestamps and reboot status are null (worker/apt timestamps are
+  added when reached). Top-level reboot status is sampled during verification.
+
+Consumer review: the bot consumes only start `ok`, `busy`, `error`, and `unit`,
+which retain their meanings. The available dashboard implementation accepts
+additive JSON fields, but its successful-upgrade UI interpolates `upgraded`
+directly and would display `null upgraded` for an unknown count. Its cache
+rebuild also discards package names and only reconciles successful upgrades;
+its nonzero-exit handling needs to preserve structured failure evidence.
+These are explicit part 2 requirements, not resolved by this repository change.
+The dashboard should render null as unknown, use `remaining_packages` and its
+own timestamp even after apt failure, keep upgrade and verification outcomes
+separate, and recover detached results by run ID. Cached counts, including the
+supplied nine-package snapshot, and unrelated bot journal messages do not
+establish an upgrade's cause or current remaining packages. No dashboard code
+or live server state is changed here.
