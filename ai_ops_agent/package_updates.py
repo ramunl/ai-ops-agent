@@ -12,14 +12,13 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from ai_ops_agent.cleanup import Runner, exclusive, run_command
 from ai_ops_agent.packages import group_updates
-from ai_ops_agent.service_control import is_locked
 
 LOCK = Path("/run/ai-packages.lock")
 LOG = Path("/var/log/ai-packages.log")
@@ -40,30 +39,62 @@ APT_UPGRADE = [
     "-o",
     "Dpkg::Options::=--force-confold",
 ]
-# Its own systemd unit: if the caller is stopped mid-run (the dashboard being
-# restarted or redeployed), apt still finishes instead of leaving dpkg broken.
-DETACHED = [
-    "systemd-run",
-    "--quiet",
-    "--wait",
-    "--collect",
-    f"--unit={UNIT}",
-    "--setenv=DEBIAN_FRONTEND=noninteractive",
-    "--setenv=LC_ALL=C",
-]
-UPGRADE = DETACHED + APT_UPGRADE
-_UPGRADED_RE = re.compile(r"^(\d+) upgraded, (\d+) newly installed", re.MULTILINE)
+STATE = Path("/var/lib/ai-packages")
+
+
+def state_directory(lock: Path) -> Path:
+    """Keep custom locks isolated from production state."""
+    return STATE if lock == Path("/run/ai-packages.lock") else lock.parent / "packages"
+
+
+def save(path: Path, result: dict) -> None:
+    """Atomically persist a record before exposing it to readers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(result, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def read_result(state: Path, run_id: str) -> dict:
+    """Read only the requested run's evidence; never consult journal text."""
+    result = json.loads((state / f"{run_id}.json").read_text())
+    if result["run_id"] != run_id:
+        raise ValueError("package outcome run ID mismatch")
+    return result
 
 
 def _tail(text: str, lines: int = 5) -> str:
-    return "\n".join(text.strip().splitlines()[-lines:])
+    return "\n".join(text.strip().splitlines()[-lines:])[-4096:]
 
 
 def pending(run: Runner) -> dict:
     """List upgradable packages by kind, without refreshing the indexes."""
-    code, out = run(["apt", "list", "--upgradable"], LIST_TIMEOUT)
-    if code != 0:
-        return {"ok": False, "error": _tail(out) or f"apt list exited with {code}"}
+    try:
+        code, out = run(["apt", "list", "--upgradable"], LIST_TIMEOUT)
+    except OSError as exc:
+        code, out = 127, str(exc)
+    if code != 0 or not out.strip():
+        return {
+            "ok": False,
+            "total": None,
+            "security": None,
+            "stable": None,
+            "untested": None,
+            "error": _tail(out)
+            or (
+                f"apt list exited with {code}"
+                if code
+                else "apt list returned no output"
+            ),
+        }
     groups = group_updates(out)
     return {
         "ok": True,
@@ -88,54 +119,8 @@ def check(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
     return result
 
 
-def upgrade(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
-    """Upgrade installed packages, then report what is still pending."""
-    started = time.time()
-    code, out = run(UPGRADE, UPGRADE_TIMEOUT)
-    journal_code, journal = run(
-        [
-            "journalctl",
-            "-u",
-            "ai-packages-upgrade",
-            "--since",
-            f"@{started:.6f}",
-            "--no-pager",
-            "-o",
-            "cat",
-        ],
-        LIST_TIMEOUT,
-    )
-    if journal_code == 0 and journal:
-        out = journal
-    if code != 0:
-        return {
-            "ok": False,
-            "error": _tail(out) or f"apt-get upgrade exited with {code}",
-        }
-    counts = _UPGRADED_RE.search(out)
-    left = pending(run)
-    if not left.get("ok"):
-        return {
-            "ok": False,
-            "error": "Upgrade finished; recheck failed: " + left["error"],
-        }
-    return {
-        "ok": True,
-        "upgraded": int(counts.group(1)) if counts else 0,
-        "started_at": started,
-        "finished_at": time.time(),
-        "remaining": left.get("total", 0),
-        "reboot_required": reboot_flag.exists(),
-    }
-
-
 def start_command(lock: Path) -> list[str]:
-    """The bot's start: the upgrade unit, returning at once instead of waiting.
-
-    The unit takes ``lock`` itself (``flock -n`` fails at once if it is held),
-    so the lock is held while apt runs and released when the unit exits, even
-    if the bot is restarted. The bot never runs apt-get in its own process.
-    """
+    """Launch the standard-library worker in a service independent of callers."""
     return [
         "systemd-run",
         "--quiet",
@@ -143,31 +128,116 @@ def start_command(lock: Path) -> list[str]:
         f"--unit={UNIT}",
         "--setenv=DEBIAN_FRONTEND=noninteractive",
         "--setenv=LC_ALL=C",
-        "flock",
-        "-n",
+        "/usr/bin/python3",
+        "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from ai_ops_agent.package_upgrade_worker import main; "
+        "sys.exit(main(sys.argv[2:]))",
+        str(Path(__file__).resolve().parent.parent),
         str(lock),
-        *APT_UPGRADE,
+        str(state_directory(lock)),
+        json.loads((state_directory(lock) / "active.json").read_text())["run_id"],
     ]
 
 
 def start_upgrade(run: Runner | None = None, lock: Path | None = None) -> dict:
-    """Start the upgrade in its detached unit and return without waiting for apt.
-
-    Returns ``{"ok": True, "unit": ...}`` once systemd has the unit, or a
-    ``busy`` result while another package run holds the lock. The lock is
-    checked first so a second start is refused without running systemd-run.
-    """
-    run = run or run_command
-    lock = lock or LOCK
-    if is_locked(lock):
-        return {"ok": False, "busy": True, "error": "a package run is already active"}
-    code, out = run(start_command(lock), START_TIMEOUT)
-    if code != 0:
+    """Fail closed with structured evidence if durable state is unavailable."""
+    try:
+        return _start_upgrade(run, lock)
+    except (OSError, ValueError, KeyError) as exc:
         return {
             "ok": False,
-            "error": _tail(out) or f"systemd-run exited with {code}",
+            "execution": "unknown",
+            "completion_confirmed": False,
+            "upgraded": None,
+            "remaining": None,
+            "apt_exit_code": None,
+            "error": "package state unavailable; do not retry: " + _tail(str(exc)),
         }
-    return {"ok": True, "unit": f"{UNIT}.service"}
+
+
+def _start_upgrade(run: Runner | None = None, lock: Path | None = None) -> dict:
+    """Reserve a durable run before launch; unresolved runs cannot be retried."""
+    run = run or run_command
+    lock = lock or LOCK
+    state = state_directory(lock)
+    with exclusive(lock) as acquired:
+        if not acquired:
+            return {
+                "ok": False,
+                "busy": True,
+                "error": "a package run is already active",
+            }
+        active = state / "active.json"
+        if active.exists():
+            previous = read_result(state, json.loads(active.read_text())["run_id"])
+            if not previous["completion_confirmed"]:
+                return {
+                    **previous,
+                    "ok": False,
+                    "busy": True,
+                    "error": "previous package run is unresolved; do not retry",
+                }
+        run_id = uuid.uuid4().hex
+        result = {
+            "ok": False,
+            "run_id": run_id,
+            "unit": f"{UNIT}.service",
+            "execution": "queued",
+            "verification": "not_run",
+            "completion_confirmed": False,
+            "apt_exit_code": None,
+            "upgraded": None,
+            "remaining": None,
+            "remaining_packages": None,
+            "reboot_required": None,
+            "started_at": time.time(),
+            "finished_at": None,
+            "checked_at": None,
+            "diagnostics": "",
+            "launcher_exit_code": None,
+            "launcher_error": None,
+            "error": "upgrade completion unknown",
+        }
+        save(state / f"{run_id}.json", result)
+        save(active, {"run_id": run_id})
+        try:
+            code, out = run(start_command(lock), START_TIMEOUT)
+        except OSError as exc:
+            code, out = 127, str(exc)
+        result["launcher_exit_code"] = code
+        if code:
+            result["execution"] = "unknown" if code == 124 else "launch_failed"
+            result["launcher_error"] = _tail(out) or f"systemd-run exited with {code}"
+            result["error"] = result["launcher_error"]
+        save(state / f"{run_id}.json", result)
+    return {**result, "ok": code == 0}
+
+
+def upgrade(
+    run: Runner,
+    reboot_flag: Path = REBOOT_FLAG,
+    lock: Path = LOCK,
+    wait_timeout: float = UPGRADE_TIMEOUT,
+) -> dict:
+    """Wait for durable worker evidence without owning or stopping apt."""
+    result = start_upgrade(run, lock)
+    if not result.get("ok"):
+        return result
+    deadline = time.monotonic() + wait_timeout
+    while True:
+        result = read_result(state_directory(lock), result["run_id"])
+        if result["completion_confirmed"]:
+            return result
+        if time.monotonic() >= deadline:
+            return {
+                **result,
+                "ok": False,
+                "execution": "unknown",
+                "error": "caller wait timed out; detached completion unknown",
+                "caller_timed_out": True,
+            }
+        time.sleep(0.1)
 
 
 def _log(log: Path, mode: str, result: dict) -> None:
@@ -197,11 +267,18 @@ def main(
         print(json.dumps({"ok": False, "error": "ai-packages must run as root"}))
         return 1
     mode = argv[0]
-    with exclusive(lock) as acquired:
-        if not acquired:
-            print(json.dumps({"ok": False, "error": "a package run is already active"}))
-            return 1
-        result = (check if mode == "check" else upgrade)(run, reboot_flag)
+    if mode == "upgrade":
+        result = upgrade(run, reboot_flag, lock)
+    else:
+        with exclusive(lock) as acquired:
+            if not acquired:
+                print(
+                    json.dumps(
+                        {"ok": False, "error": "a package run is already active"}
+                    )
+                )
+                return 1
+            result = check(run, reboot_flag)
     _log(log, mode, result)
     print(json.dumps(result))
     return 0 if result["ok"] else 1
