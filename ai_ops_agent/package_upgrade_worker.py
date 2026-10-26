@@ -124,7 +124,7 @@ def work(
             remaining_packages=left,
             checked_at=checked_at,
             reboot_required=reboot,
-            ok=code == 0 and not timed_out and left["ok"],
+            ok=code == 0 and not timed_out and left["ok"] and left["total"] == 0,
             verification_error=left.get("error"),
         )
         if code != 0:
@@ -135,6 +135,13 @@ def work(
             result["error"] = "apt exceeded its deadline; completion now confirmed"
         elif not left["ok"]:
             result["error"] = "Upgrade finished; recheck failed: " + left["error"]
+        elif left["total"]:
+            # apt exited 0 but kept packages back; success would hide them.
+            names = [*left["security"], *left["stable"], *left["untested"]]
+            result["error"] = (
+                f"apt finished but {left['total']} package(s) remain upgradable: "
+                + ", ".join(names)
+            )[-4096:]
         else:
             result.pop("error", None)
         packages.save(path, result)

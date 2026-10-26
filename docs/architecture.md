@@ -102,7 +102,9 @@ Upgrade JSON adds these independent facts:
 - `verification`: `not_run`, `succeeded`, or `failed`, with separate
   `verification_error`. Verification runs after confirmed apt exit, including
   nonzero exit and completion following a deadline. `ok` requires successful
-  apt execution within its deadline and successful verification.
+  apt execution within its deadline, successful verification, and zero
+  remaining upgradable packages; otherwise `error` names the packages still
+  upgradable.
 - `remaining`: verified integer total, otherwise null. `remaining_packages`
   contains `ok`, `total`, `security`, `stable`, `untested`, `checked_at`, and
   `reboot_required`; failed queries have null totals/lists and an error.
