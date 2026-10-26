@@ -26,13 +26,19 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 
-from ai_ops_agent.services_list import MANAGED_SERVICES, SERVICE_PORTS, ServicePort
+from ai_ops_agent.services_list import (
+    DOCKER_SERVICES,
+    MANAGED_SERVICES,
+    SERVICE_PORTS,
+    ServicePort,
+)
 
 LOG = "/var/log/ai-service.log"
 DEPLOYMENT_STATE = Path("/var/lib/ai-deploy/state.json")
@@ -67,6 +73,8 @@ def restart(service: str, run: Runner = run_command) -> dict:
     """Queue a restart of a whitelisted service."""
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service in DOCKER_SERVICES:
+        return _docker_action(service, "restart", run)
     code, out = run(["systemctl", "--no-block", "restart", service], 30)
     if code != 0:
         return {"ok": False, "error": out or f"systemctl exited with {code}"}
@@ -125,16 +133,102 @@ def _port_status(spec: ServicePort, run: Runner) -> tuple[bool | None, str]:
         fields = line.split()
         if len(fields) >= 4 and fields[3].rsplit(":", 1)[-1] == str(spec.port):
             return True, "a process still listens on the port"
-    code, out = run(
-        ["docker", "ps", "-q", "--filter", f"publish={spec.port}"], QUERY_TIMEOUT
-    )
+    code, out = run(["docker", "ps", "--format", "{{.Ports}}"], QUERY_TIMEOUT)
     if code == 127:  # Docker is not installed, so it publishes nothing.
         return False, ""
     if code != 0:
         return None, f"could not query Docker: {out}"
-    if out:
+    # Match the host side, including mappings to a different container port.
+    if re.search(rf":{spec.port}->[0-9]+/{spec.proto}(?:,|\s|$)", out):
         return True, "a Docker container still publishes the port"
     return False, ""
+
+
+def status_args(service: str) -> list[str]:
+    """Build a status query for a whitelisted service's actual backend."""
+    if service not in MANAGED_SERVICES:
+        raise ValueError("unknown service")
+    if service in DOCKER_SERVICES:
+        return [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.Status}}",
+            DOCKER_SERVICES[service],
+        ]
+    return ["systemctl", "is-active", service]
+
+
+def log_args(service: str) -> list[str]:
+    """Build a bounded log query for a whitelisted service."""
+    if service not in MANAGED_SERVICES:
+        raise ValueError("unknown service")
+    if service in DOCKER_SERVICES:
+        return ["docker", "logs", "--tail", "30", DOCKER_SERVICES[service]]
+    return ["journalctl", "-u", service, "-n", "30", "--no-pager"]
+
+
+def _docker_action(service: str, action: str, run: Runner) -> dict:
+    """Control one fixed container and verify its state and port after the action.
+
+    Docker removes its publication rules on stop and restores them on start.
+    UFW rules are deliberately left alone: they cannot gate Docker forwarding.
+    """
+    spec = SERVICE_PORTS[service]
+    code, out = run(["docker", action, DOCKER_SERVICES[service]], UNIT_TIMEOUT)
+    if code != 0:
+        return _failed(
+            service, out or f"docker exited with {code}", None, spec.port, None
+        )
+    code, out = run(status_args(service), QUERY_TIMEOUT)
+    state = out.strip() if code == 0 else None
+    expected = "exited" if action == "stop" else "running"
+    unit = {"running": "active", "exited": "inactive"}.get(state, state)
+    if state != expected:
+        return _failed(
+            service,
+            f"container state {state or 'unverified'}; expected {expected}",
+            unit,
+            spec.port,
+            None,
+        )
+    if action == "stop":
+        listening, detail = _port_status(spec, run)
+        if listening is False:
+            return _done(service, "inactive", spec.port, False)
+        return _failed(
+            service,
+            "container stopped; port not verified closed: " + detail,
+            unit,
+            spec.port,
+            listening,
+        )
+    # Verify this container's exact host publication, rather than another
+    # process that happens to listen on the configured port.
+    code, out = run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Ports}}",
+            DOCKER_SERVICES[service],
+        ],
+        QUERY_TIMEOUT,
+    )
+    try:
+        bindings = json.loads(out)[f"{spec.port}/{spec.proto}"] if code == 0 else None
+        published = any(b.get("HostPort") == str(spec.port) for b in bindings or [])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        published = False
+    if not published:
+        return _failed(
+            service,
+            "container running; configured host port publication not verified",
+            unit,
+            spec.port,
+            None,
+        )
+    return _done(service, "active", spec.port, True)
 
 
 def start(service: str, run: Runner = run_command) -> dict:
@@ -144,6 +238,8 @@ def start(service: str, run: Runner = run_command) -> dict:
     """
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service in DOCKER_SERVICES:
+        return _docker_action(service, "start", run)
     spec: ServicePort | None = SERVICE_PORTS.get(service)
     port = spec.port if spec else None
     code, out = run(["systemctl", "start", service], UNIT_TIMEOUT)
@@ -173,6 +269,8 @@ def stop(service: str, run: Runner = run_command) -> dict:
     """
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service in DOCKER_SERVICES:
+        return _docker_action(service, "stop", run)
     spec: ServicePort | None = SERVICE_PORTS.get(service)
     port = spec.port if spec else None
     code, out = run(["systemctl", "stop", service], UNIT_TIMEOUT)

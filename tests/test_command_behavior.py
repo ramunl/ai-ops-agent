@@ -580,3 +580,83 @@ def test_shell_preserves_output_and_environment(
         == expected
     )
     assert os.environ["SHELL_TEST_OVERRIDE"] == "original"
+
+
+def test_services_queries_docker_for_iptv(chat, monkeypatch):
+    async def state(args):
+        return "running" if args[0] == "docker" else "active"
+
+    command = AsyncMock(side_effect=state)
+    monkeypatch.setattr(services, "run_command", command)
+    asyncio.run(services.services(chat, SimpleNamespace(args=[])))
+    assert any(c.args[0][0] == "docker" for c in command.await_args_list)
+    text = chat.message.reply_text.await_args.args[0]
+    assert "✅ <code>iptv-proxy</code> — running" in text
+
+
+@pytest.mark.parametrize("handler", ["logs", "errors"])
+def test_iptv_logs_use_docker(chat, monkeypatch, handler):
+    command = AsyncMock(return_value="recent logs")
+    monkeypatch.setattr(services, "run_command", command)
+    asyncio.run(getattr(services, handler)(chat, SimpleNamespace(args=["iptv-proxy"])))
+    command.assert_awaited_once_with(["docker", "logs", "--tail", "30", "iptv-proxy"])
+
+
+def test_iptv_restart_uses_service_control(chat, monkeypatch):
+    restart = Mock(
+        return_value={"ok": True, "unit": "active", "port": 8080, "port_open": True}
+    )
+    monkeypatch.setattr(services.service_control, "restart", restart)
+    command = AsyncMock()
+    monkeypatch.setattr(services, "run_command", command)
+    asyncio.run(services.restart(chat, SimpleNamespace(args=["iptv-proxy"])))
+    restart.assert_called_once_with("iptv-proxy")
+    command.assert_not_awaited()
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+def test_iptv_stop_button_requires_owner_and_confirmation(monkeypatch, authorized):
+    query = SimpleNamespace(
+        data=services.make_callback_data("svc_ask_stop", "iptv-proxy"),
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(
+            id=config.AUTHORIZED_CHAT_ID
+            if authorized
+            else config.AUTHORIZED_CHAT_ID + 1
+        ),
+        callback_query=query,
+    )
+    stop = Mock(side_effect=AssertionError("stop ran before confirmation"))
+    monkeypatch.setattr(services.service_control, "stop", stop)
+    asyncio.run(services.service_button(update, SimpleNamespace()))
+    stop.assert_not_called()
+    if authorized:
+        assert "8080/tcp" in query.edit_message_text.await_args.args[0]
+        assert "Confirm stop" in str(
+            query.edit_message_text.await_args.kwargs["reply_markup"]
+        )
+    else:
+        query.answer.assert_not_awaited()
+        query.edit_message_text.assert_not_awaited()
+
+
+def test_iptv_confirmed_stop_uses_container_controller(monkeypatch):
+    query = SimpleNamespace(
+        data=services.make_callback_data("svc_stop", "iptv-proxy"),
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=config.AUTHORIZED_CHAT_ID),
+        callback_query=query,
+    )
+    stop = Mock(
+        return_value={"ok": True, "unit": "inactive", "port": 8080, "port_open": False}
+    )
+    monkeypatch.setattr(services.service_control, "stop", stop)
+    asyncio.run(services.service_button(update, SimpleNamespace()))
+    stop.assert_called_once_with("iptv-proxy")
+    assert "closed" in query.edit_message_text.await_args.args[0]
