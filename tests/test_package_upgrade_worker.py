@@ -79,9 +79,7 @@ def test_exit_zero_with_kept_back_package_is_not_success(tmp_path):
         lock,
         state,
         run_id,
-        lambda args, timeout: (
-            (0, kept_back) if args[0] == "apt-get" else (0, LISTING)
-        ),
+        lambda args, timeout: (0, kept_back) if args[0] == "apt-get" else (0, LISTING),
         tmp_path / "absent",
     )
     assert result["execution"] == "succeeded"

@@ -138,10 +138,8 @@ def work(
         elif left["total"]:
             # apt exited 0 but kept packages back; success would hide them.
             names = [*left["security"], *left["stable"], *left["untested"]]
-            result["error"] = (
-                f"apt finished but {left['total']} package(s) remain upgradable: "
-                + ", ".join(names)
-            )[-4096:]
+            prefix = f"apt finished but {left['total']} package(s) remain upgradable: "
+            result["error"] = (prefix + ", ".join(names))[-4096:]
         else:
             result.pop("error", None)
         packages.save(path, result)
