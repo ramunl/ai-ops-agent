@@ -53,6 +53,43 @@ def test_completion_always_verifies_remaining(tmp_path, code, output, execution,
     assert len(calls) == 2
 
 
+def test_clean_exit_with_nothing_remaining_is_ok(tmp_path):
+    lock, state, run_id = reserve(tmp_path)
+    result = worker.work(
+        lock,
+        state,
+        run_id,
+        lambda args, timeout: (
+            (0, "1 upgraded, 0 newly installed")
+            if args[0] == "apt-get"
+            else (0, "Listing...\n")
+        ),
+        tmp_path / "absent",
+    )
+    assert result["execution"] == "succeeded"
+    assert result["remaining"] == 0
+    assert result["ok"] is True
+    assert "error" not in result
+
+
+def test_exit_zero_with_kept_back_package_is_not_success(tmp_path):
+    lock, state, run_id = reserve(tmp_path)
+    kept_back = "0 upgraded, 0 newly installed, 0 to remove and 1 not upgraded."
+    result = worker.work(
+        lock,
+        state,
+        run_id,
+        lambda args, timeout: (0, kept_back) if args[0] == "apt-get" else (0, LISTING),
+        tmp_path / "absent",
+    )
+    assert result["execution"] == "succeeded"
+    assert result["upgraded"] == 0
+    assert result["remaining"] == 1
+    assert result["remaining_packages"]["stable"] == ["curl"]
+    assert result["ok"] is False
+    assert result["error"] == "apt finished but 1 package(s) remain upgradable: curl"
+
+
 def test_failed_verification_is_unknown_not_zero(tmp_path):
     lock, state, run_id = reserve(tmp_path)
     result = worker.work(
