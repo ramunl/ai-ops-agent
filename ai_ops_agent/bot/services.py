@@ -9,8 +9,10 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from ai_agent_common.buttons import keyboard, make_callback_data, parse_callback_data
 from ai_ops_agent import config, service_control
 from ai_ops_agent.bot.transport import (
+    expandable_html,
     is_authorized,
     reply,
     reply_expandable,
@@ -54,7 +56,83 @@ async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         state = strip_exit_prefix(raw).strip()
         icon = "✅" if state == "active" else "❌"
         lines.append(f"{icon} <code>{html.escape(name)}</code> — {html.escape(state)}")
-    await reply_html(update, "\n".join(lines))
+    await reply_html(update, "\n".join(lines), reply_markup=service_keyboard())
+
+
+def service_keyboard():
+    """A Start and a Stop button for each whitelisted service."""
+    options = []
+    for name in config.MANAGED_SERVICES:
+        options.append((f"▶ Start {name}", make_callback_data("svc_start", name)))
+        options.append((f"■ Stop {name}", make_callback_data("svc_ask_stop", name)))
+    return keyboard(options, columns=2)
+
+
+def _stop_question(service: str) -> str:
+    """Ask before stopping: stopping drops clients and closes the port."""
+    port = config.SERVICE_PORTS.get(service)
+    if port is None:
+        firewall = "No firewall port is configured for it."
+    else:
+        firewall = f"Its port {port.port}/{port.proto} will be closed."
+    return (
+        f"⚠️ Stop <code>{html.escape(service)}</code>?\n{firewall} "
+        "Clients connected to it will be disconnected."
+    )
+
+
+def _result_text(service: str, result: dict) -> str:
+    """HTML for a start or stop result, with the port state it verified."""
+    port = result.get("port")
+    if port is None:
+        where = "no firewall port"
+    else:
+        state = {True: "open", False: "closed", None: "unknown"}[result.get("port_open")]
+        where = f"port {port} {state}"
+    svc = html.escape(service)
+    if result.get("ok"):
+        unit = html.escape(result["unit"])
+        return f"✅ <code>{svc}</code> is now <b>{unit}</b> — {where}"
+    unit = html.escape(result.get("unit") or "unknown")
+    header = f"⚠️ <code>{svc}</code> failed — unit {unit}, {where}"
+    return expandable_html(header, result.get("error") or "No details.")
+
+
+async def service_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start a service, or ask first and then stop it, from the service buttons."""
+    if not is_authorized(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    action, service = parse_callback_data(query.data or "")
+    if action == "svc_cancel":
+        await query.edit_message_text("Cancelled. Nothing was changed.")
+        return
+    if service not in config.MANAGED_SERVICES:
+        await query.edit_message_text("Unknown service. Nothing was changed.")
+        return
+    if action == "svc_ask_stop":
+        confirm = keyboard(
+            [
+                ("Confirm stop", make_callback_data("svc_stop", service)),
+                ("Cancel", make_callback_data("svc_cancel")),
+            ]
+        )
+        await query.edit_message_text(
+            _stop_question(service), parse_mode="HTML", reply_markup=confirm
+        )
+        return
+    if action == "svc_start":
+        verb, call = "Starting", service_control.start
+    elif action == "svc_stop":
+        verb, call = "Stopping", service_control.stop
+    else:
+        return
+    await query.edit_message_text(
+        f"{verb} <code>{html.escape(service)}</code>...", parse_mode="HTML"
+    )
+    result = await asyncio.to_thread(call, service)
+    await query.edit_message_text(_result_text(service, result), parse_mode="HTML")
 
 
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

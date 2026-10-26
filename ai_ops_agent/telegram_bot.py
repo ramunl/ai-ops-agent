@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from ai_ops_agent import config
 from ai_ops_agent.bot.agents import (
@@ -24,7 +24,14 @@ from ai_ops_agent.bot.security import (
     login_watch_forever,
     security_cmd,
 )
-from ai_ops_agent.bot.services import errors, logs, reboot, restart, services
+from ai_ops_agent.bot.services import (
+    errors,
+    logs,
+    reboot,
+    restart,
+    service_button,
+    services,
+)
 from ai_ops_agent.bot.system import disk, health, memory, uptime
 
 logger = logging.getLogger(__name__)
@@ -81,4 +88,5 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("rollback", rollback))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("security", security_cmd))
+    app.add_handler(CallbackQueryHandler(service_button, pattern=r"^svc_"))
     return app

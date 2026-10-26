@@ -22,8 +22,17 @@ except ValueError:
 # Services this bot is allowed to manage. Whitelist only — never allow
 # arbitrary service names from user input. Defined once, shared with the
 # dashboard's ai-service command.
-from ai_ops_agent.services_list import MANAGED_SERVICES  # noqa: E402
+from ai_ops_agent.services_list import (  # noqa: E402
+    MANAGED_SERVICES,
+    SERVICE_PORTS,
+    validate_service_ports,
+)
 from ai_ops_agent.tools_list import AI_TOOLS  # noqa: E402
+
+try:
+    validate_service_ports(MANAGED_SERVICES, SERVICE_PORTS)
+except ValueError as e:
+    sys.exit(f"ERROR: invalid service port settings: {e}")
 
 # Default service for /logs when none is given.
 DEFAULT_SERVICE = "ai-coding-agent"

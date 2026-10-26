@@ -1,8 +1,9 @@
 #!/bin/sh
-# ai-service list|restart <service>|reboot: whitelisted service control (JSON output).
-# Installed as /usr/local/sbin/ai-service; the logic is
-# ai_ops_agent/service_control.py, run with the system python3 (standard
-# library only, no bot credentials).
+# ai-service list|restart|start|stop <service>|reboot: whitelisted service control
+# (JSON output). start and stop also open and close the service's firewall port
+# (services_list.SERVICE_PORTS). Installed as /usr/local/sbin/ai-service; the
+# logic is ai_ops_agent/service_control.py, run with the system python3
+# (standard library only, no bot credentials).
 APP_DIR="${AI_OPS_AGENT_DIR:-/opt/ai-ops-agent}"
 exec /usr/bin/env python3 -c '
 import sys

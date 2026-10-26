@@ -48,21 +48,25 @@ async def reply_code(update: Update, header: str, body: str) -> None:
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-async def reply_expandable(update: Update, header: str, body: str) -> None:
-    """Reply with header + collapsible body (tap to expand). Use for long outputs."""
+def expandable_html(header: str, body: str) -> str:
+    """Header + collapsible body (tap to expand), escaped and bounded."""
     overhead = len(header) + 1 + len("<blockquote expandable></blockquote>")
     limit = config.TELEGRAM_MESSAGE_LIMIT - overhead - len(_SUFFIX)
     if len(body) > limit:
         body = body[:limit] + _SUFFIX
-    text = f"{header}\n<blockquote expandable>{html.escape(body)}</blockquote>"
-    await update.message.reply_text(text, parse_mode="HTML")
+    return f"{header}\n<blockquote expandable>{html.escape(body)}</blockquote>"
 
 
-async def reply_html(update: Update, text: str) -> None:
+async def reply_expandable(update: Update, header: str, body: str) -> None:
+    """Reply with header + collapsible body (tap to expand). Use for long outputs."""
+    await update.message.reply_text(expandable_html(header, body), parse_mode="HTML")
+
+
+async def reply_html(update: Update, text: str, reply_markup=None) -> None:
     """Reply with HTML-formatted text, truncated to fit Telegram's limit."""
     if len(text) > config.TELEGRAM_MESSAGE_LIMIT:
         text = text[: config.TELEGRAM_MESSAGE_LIMIT - len(_SUFFIX)] + _SUFFIX
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
 
 async def send_rich_message(update: Update, html_text: str) -> bool:
