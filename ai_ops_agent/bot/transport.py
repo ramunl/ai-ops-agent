@@ -8,7 +8,7 @@ import json
 import logging
 from urllib import error, request
 
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 
 from ai_agent_common import is_authorized as shared_is_authorized
 from ai_ops_agent import config
@@ -62,7 +62,9 @@ async def reply_expandable(update: Update, header: str, body: str) -> None:
     await update.message.reply_text(expandable_html(header, body), parse_mode="HTML")
 
 
-async def reply_html(update: Update, text: str, reply_markup=None) -> None:
+async def reply_html(
+    update: Update, text: str, reply_markup: InlineKeyboardMarkup | None = None
+) -> None:
     """Reply with HTML-formatted text, truncated to fit Telegram's limit."""
     if len(text) > config.TELEGRAM_MESSAGE_LIMIT:
         text = text[: config.TELEGRAM_MESSAGE_LIMIT - len(_SUFFIX)] + _SUFFIX

@@ -6,7 +6,7 @@ import asyncio
 import html
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from ai_agent_common.buttons import keyboard, make_callback_data, parse_callback_data
@@ -59,7 +59,7 @@ async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await reply_html(update, "\n".join(lines), reply_markup=service_keyboard())
 
 
-def service_keyboard():
+def service_keyboard() -> InlineKeyboardMarkup:
     """A Start and a Stop button for each whitelisted service."""
     options = []
     for name in config.MANAGED_SERVICES:
@@ -87,7 +87,8 @@ def _result_text(service: str, result: dict) -> str:
     if port is None:
         where = "no firewall port"
     else:
-        state = {True: "open", False: "closed", None: "unknown"}[result.get("port_open")]
+        port_open = result.get("port_open")
+        state = {True: "open", False: "closed", None: "unknown"}[port_open]
         where = f"port {port} {state}"
     svc = html.escape(service)
     if result.get("ok"):
