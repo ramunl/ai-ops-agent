@@ -10,7 +10,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-MANAGED_SERVICES = ["ai-coding-agent", "ai-pm-agent", "ai-ops-agent", "ai-dashboard"]
+MANAGED_SERVICES = [
+    "ai-coding-agent",
+    "ai-pm-agent",
+    "ai-ops-agent",
+    "ai-dashboard",
+    "iptv-proxy",
+]
 
 
 @dataclass(frozen=True)
@@ -25,7 +31,10 @@ class ServicePort:
 # started and stopped without touching the firewall. The owner adds an entry
 # (and the unit to MANAGED_SERVICES) once the unit name and port are confirmed,
 # e.g. ``"iptv-stream": ServicePort(<port>)``.
-SERVICE_PORTS: dict[str, ServicePort] = {}
+SERVICE_PORTS: dict[str, ServicePort] = {"iptv-proxy": ServicePort(8080)}
+
+# Exact container names only; never accept arbitrary Docker targets from chat.
+DOCKER_SERVICES = {"iptv-proxy": "iptv-proxy"}
 
 
 def validate_service_ports(

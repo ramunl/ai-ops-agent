@@ -47,14 +47,14 @@ async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     results = await asyncio.gather(
         *(
-            run_command(["systemctl", "is-active", name])
+            run_command(service_control.status_args(name))
             for name in config.MANAGED_SERVICES
         )
     )
     lines = ["🔧 <b>Services</b>", ""]
     for name, raw in zip(config.MANAGED_SERVICES, results):
         state = strip_exit_prefix(raw).strip()
-        icon = "✅" if state == "active" else "❌"
+        icon = "✅" if state in ("active", "running") else "❌"
         lines.append(f"{icon} <code>{html.escape(name)}</code> — {html.escape(state)}")
     await reply_html(update, "\n".join(lines), reply_markup=service_keyboard())
 
@@ -142,9 +142,7 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     service = resolve_service(context.args)
     if service is not None:
-        output = await run_command(
-            ["journalctl", "-u", service, "-n", "30", "--no-pager"]
-        )
+        output = await run_command(service_control.log_args(service))
         await reply_expandable(
             update, f"📋 Logs — <code>{html.escape(service)}</code>", output
         )
@@ -167,10 +165,22 @@ async def errors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Unknown service. Allowed: " + ", ".join(config.MANAGED_SERVICES),
             )
             return
+        if service in service_control.DOCKER_SERVICES:
+            output = await run_command(service_control.log_args(service))
+            await reply_expandable(
+                update,
+                f"📋 Recent container logs — <code>{html.escape(service)}</code>",
+                output,
+            )
+            return
         services = [service]
         header = f"🚨 Errors — <code>{html.escape(service)}</code>"
     else:
-        services = config.MANAGED_SERVICES
+        services = [
+            name
+            for name in config.MANAGED_SERVICES
+            if name not in service_control.DOCKER_SERVICES
+        ]
         header = "🚨 Errors — all managed services"
 
     output = await run_command(
@@ -201,6 +211,10 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Unknown service. Allowed: " + ", ".join(config.MANAGED_SERVICES),
         )
         return
+    if service in service_control.DOCKER_SERVICES:
+        result = await asyncio.to_thread(service_control.restart, service)
+        await reply_html(update, _result_text(service, result))
+        return
     svc = html.escape(service)
     await update.message.reply_text(
         f"♻️ Restarting <code>{svc}</code>...", parse_mode="HTML"
@@ -218,7 +232,7 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ).strip()
         if state not in ("activating", "deactivating"):
             break
-    icon = "✅" if state == "active" else "❌"
+    icon = "✅" if state in ("active", "running") else "❌"
     await update.message.reply_text(
         f"{icon} <code>{svc}</code> is now: <b>{html.escape(state)}</b>",
         parse_mode="HTML",

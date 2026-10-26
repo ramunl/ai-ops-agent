@@ -320,8 +320,28 @@ it (ufw does not block Docker-published ports). Every step is a fixed argument
 list; any timeout or nonzero exit stops the sequence. If the unit stops but the
 port cannot be closed, the JSON reports `"ok": false`, `"unit": "inactive"` and
 `"port_open"` as `true` or `null`. The bot asks for confirmation before stopping.
-Services without a `SERVICE_PORTS` entry change only the unit. No port is
-configured yet; add an entry once the unit name and port are confirmed.
+Services without a `SERVICE_PORTS` entry change only the unit.
+
+**IPTV Docker controls.** `iptv-proxy` is whitelisted as an existing Docker
+container with host TCP port 8080 (confirmed by a read-only server inspection).
+The Services screen includes its Start and Stop buttons and displays Docker
+state; `/restart iptv-proxy` and `/logs iptv-proxy` also use Docker. A confirmed
+stop runs `docker stop iptv-proxy`, verifies the container exited, then checks
+that no socket listens on 8080 and no running container publishes that port.
+A remaining listener or publisher is reported as a partial failure. Start and
+restart verify the container is running and publishes host TCP 8080. These
+checks verify local state, not public internet reachability or application health.
+
+Docker removes its port publication on stop and restores it on start. These
+controls leave UFW unchanged because Docker forwarding rules bypass UFW input
+rules. They do not create containers, change restart policies, or stop Docker
+itself. A host reboot or an external operator can start the container again.
+Other containers and shared ports are not managed by these buttons.
+
+Deploy through the existing deployment workflow and restart the Ops bot to load
+the new whitelist. The `deploy/ai-service` wrapper is unchanged and imports the
+updated Python module; no separate installer is provided or needed. No live
+start/stop or firewall changes were performed while preparing this change.
 
 ## Package updates (`ai-packages`)
 

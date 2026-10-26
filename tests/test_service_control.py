@@ -18,7 +18,7 @@ from ai_ops_agent.services_list import (
 REPO = Path(__file__).resolve().parent.parent
 SHOW_STATE = ["systemctl", "show", "--property=ActiveState", "--value"]
 LISTEN_CHECK = ["ss", "-H", "-l", "-n", "-t"]
-DOCKER_CHECK = ["docker", "ps", "-q", "--filter", "publish=8080"]
+DOCKER_CHECK = ["docker", "ps", "--format", "{{.Ports}}"]
 
 
 class FakeRun:
@@ -91,6 +91,7 @@ def test_whitelist_covers_every_agent_and_the_dashboard():
         "ai-pm-agent",
         "ai-ops-agent",
         "ai-dashboard",
+        "iptv-proxy",
     ]
 
 
@@ -366,7 +367,7 @@ def test_stop_reports_a_port_that_is_still_listening():
 
 def test_stop_reports_a_docker_container_that_still_publishes_the_port():
     host = FakeHost(state="active")
-    host.publisher = "iptv-proxy"
+    host.publisher = "0.0.0.0:8080->8080/tcp"
     with iptv_config():
         result = service_control.stop("ai-iptv", host)
     assert result["ok"] is False
@@ -449,3 +450,106 @@ def test_port_settings_must_be_valid_integers_and_unique():
 
 def test_shipped_port_settings_are_valid():
     validate_service_ports(MANAGED_SERVICES, SERVICE_PORTS)
+
+
+class FakeDocker:
+    def __init__(
+        self,
+        state="running",
+        listener=False,
+        publisher="",
+        failure=None,
+        published=True,
+    ):
+        self.calls = []
+        self.state = state
+        self.listener = listener
+        self.publisher = publisher
+        self.failure = failure
+        self.published = published
+
+    def __call__(self, args, timeout):
+        self.calls.append(args)
+        if args[:2] == ["docker", "inspect"]:
+            if args[3] == "{{.State.Status}}":
+                return 0, self.state
+            return 0, json.dumps(
+                {"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}
+                if self.published
+                else {}
+            )
+        if args[:2] in (["docker", "start"], ["docker", "stop"], ["docker", "restart"]):
+            return self.failure or (0, "iptv-proxy")
+        if args[0] == "ss":
+            return 0, "LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:*" if self.listener else ""
+        if args[:2] == ["docker", "ps"]:
+            return 0, self.publisher
+        raise AssertionError(args)
+
+
+def test_iptv_start_checks_exact_container_and_published_port():
+    host = FakeDocker()
+    result = service_control.start("iptv-proxy", host)
+    assert result["ok"] and result["port_open"]
+    assert host.calls[0] == ["docker", "start", "iptv-proxy"]
+    assert all(call[0] not in {"systemctl", "ufw"} for call in host.calls)
+
+
+@pytest.mark.parametrize("state,published", [("exited", True), ("running", False)])
+def test_iptv_start_rejects_wrong_state_or_missing_publication(state, published):
+    result = service_control.start(
+        "iptv-proxy", FakeDocker(state=state, published=published)
+    )
+    assert not result["ok"]
+    assert result["port_open"] is None
+
+
+def test_iptv_stop_verifies_no_listener_or_docker_publisher():
+    host = FakeDocker(state="exited")
+    result = service_control.stop("iptv-proxy", host)
+    assert result["ok"] and result["port_open"] is False
+    assert host.calls[0] == ["docker", "stop", "iptv-proxy"]
+    assert host.calls[-1] == DOCKER_CHECK
+    assert all(call[0] not in {"systemctl", "ufw"} for call in host.calls)
+
+
+@pytest.mark.parametrize(
+    "listener,publisher", [(True, ""), (False, "[::]:8080->80/tcp")]
+)
+def test_iptv_stop_reports_partial_state_when_port_remains(listener, publisher):
+    result = service_control.stop(
+        "iptv-proxy", FakeDocker(state="exited", listener=listener, publisher=publisher)
+    )
+    assert not result["ok"]
+    assert result["unit"] == "inactive"
+    assert result["port_open"] is True
+
+
+@pytest.mark.parametrize("action", ["start", "stop", "restart"])
+@pytest.mark.parametrize("code", [1, 124])
+def test_iptv_command_failure_or_timeout_skips_later_steps(action, code):
+    host = FakeDocker(failure=(code, "failed"))
+    assert not getattr(service_control, action)("iptv-proxy", host)["ok"]
+    assert len(host.calls) == 1
+
+
+def test_iptv_restart_and_backend_queries_use_docker():
+    host = FakeDocker()
+    assert service_control.restart("iptv-proxy", host)["ok"]
+    assert host.calls[0] == ["docker", "restart", "iptv-proxy"]
+    assert service_control.status_args("iptv-proxy") == [
+        "docker",
+        "inspect",
+        "--format",
+        "{{.State.Status}}",
+        "iptv-proxy",
+    ]
+    assert service_control.log_args("iptv-proxy") == [
+        "docker",
+        "logs",
+        "--tail",
+        "30",
+        "iptv-proxy",
+    ]
+    with pytest.raises(ValueError):
+        service_control.status_args("--all")
