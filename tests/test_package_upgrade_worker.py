@@ -43,14 +43,19 @@ def test_completion_always_verifies_remaining(tmp_path, code, output, execution,
     assert result["apt_exit_code"] == code
     assert result["upgraded"] == count
     assert result["remaining"] == 1
-    assert result["remaining_packages"]["stable"] == ["curl"]
+    assert result["stable"] == ["curl"]
     assert result["checked_at"] >= result["apt_finished_at"]
     assert result["completion_confirmed"]
-    assert len(calls) == 2
+    # The upgrade, the listing and the simulation that explains what is left.
+    assert [call[:2] for call in calls] == [
+        ["apt-get", "upgrade"],
+        ["apt", "list"],
+        ["apt-get", "-s"],
+    ]
     assert packages.read_result(state, run_id) == result
     assert not is_locked(lock)
     assert worker.work(lock, state, run_id, run) == result
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_clean_exit_with_nothing_remaining_is_ok(tmp_path):
@@ -85,9 +90,12 @@ def test_exit_zero_with_kept_back_package_is_not_success(tmp_path):
     assert result["execution"] == "succeeded"
     assert result["upgraded"] == 0
     assert result["remaining"] == 1
-    assert result["remaining_packages"]["stable"] == ["curl"]
+    assert result["stable"] == ["curl"]
     assert result["ok"] is False
-    assert result["error"] == "apt finished but 1 package(s) remain upgradable: curl"
+    assert result["error"] == (
+        "apt finished but 1 package(s) remain upgradable: curl "
+        "(details: /logs packages)"
+    )
 
 
 def test_failed_verification_is_unknown_not_zero(tmp_path):
@@ -104,7 +112,7 @@ def test_failed_verification_is_unknown_not_zero(tmp_path):
     assert result["execution"] == "succeeded"
     assert result["verification"] == "failed"
     assert result["remaining"] is None
-    assert result["remaining_packages"]["total"] is None
+    assert result["remaining_packages"] is None
     assert not result["ok"]
 
 
@@ -209,7 +217,8 @@ def test_missing_or_timed_out_listing_is_unknown(tmp_path, listing):
     assert result["remaining"] is None
     assert result["verification"] == "failed"
     assert result["reboot_required"] is True
-    assert result["remaining_packages"]["checked_at"] == result["checked_at"]
+    assert result["remaining_packages"] is None
+    assert result["verification_error"]
 
 
 def test_cli_waits_for_worker_failure_and_returns_structured_json(tmp_path, capsys):
@@ -240,5 +249,5 @@ def test_cli_waits_for_worker_failure_and_returns_structured_json(tmp_path, caps
         thread.join(5)
     result = json.loads(capsys.readouterr().out)
     assert result["apt_exit_code"] == 100
-    assert result["remaining_packages"]["stable"] == ["curl"]
+    assert result["stable"] == ["curl"]
     assert result["error"] == "apt failed"

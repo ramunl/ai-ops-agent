@@ -34,7 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/uptime — uptime and load\n\n"
         "<b>🔧 Services</b>\n"
         "/services — status of managed services\n"
-        "/logs [service] — recent logs\n"
+        "/logs [service] — recent logs; /logs packages — package runs\n"
         "/errors [service] — recent errors, all services by default\n"
         "/restart &lt;service&gt; — restart a service\n\n"
         "<b>⚙️ System</b>\n"

@@ -350,8 +350,16 @@ runs the same commands as the bot's `/update` and `/upgrade` for the dashboard.
 
 ```bash
 ai-packages check     # apt-get update, then what can be upgraded, by kind
-ai-packages upgrade   # apt-get upgrade -y, keeping installed config files
+ai-packages status    # the same list without apt-get update (read-only)
+ai-packages upgrade   # apt-get upgrade -y --with-new-pkgs, keeping config files
 ```
+
+`total` counts what the upgrade can install. Packages apt skips on purpose are
+counted in `waiting` and listed in `packages` with the reason: Ubuntu's phased
+rollout (apt installs them later by itself), `apt-mark hold`, or kept back
+because a package would have to be removed (run `apt full-upgrade` by hand after
+checking). Every check and upgrade step is logged to `/var/log/ai-packages.log`;
+`/logs packages` shows it in the bot.
 
 The mode is the only argument: no package names or apt options can be passed.
 It never removes packages (`upgrade`, not `full-upgrade`). The upgrade runs in

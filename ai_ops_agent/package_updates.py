@@ -1,8 +1,13 @@
 """Check for and install system package updates; the dashboard calls this.
 
-Run as ``ai-packages check`` or ``ai-packages upgrade``; prints one JSON
+Run as ``ai-packages check``, ``upgrade`` or ``status``; prints one JSON
 document. The mode is the only argument, so a caller can never choose packages
 or pass apt options. Same commands as the bot's /update and /upgrade.
+
+``total`` counts what the upgrade can install. Packages apt skips on purpose
+(phased rollout, held, kept back; see apt_reasons) are counted in ``waiting``
+and listed in ``packages`` with the reason. Each step is written to LOG, which
+/logs packages shows in the bot.
 
 Standard library only, run with the system python3.
 """
@@ -17,6 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
+from ai_ops_agent import apt_reasons
 from ai_ops_agent.cleanup import Runner, exclusive, run_command
 from ai_ops_agent.packages import group_updates
 
@@ -28,12 +34,14 @@ LIST_TIMEOUT = 120
 UPGRADE_TIMEOUT = 900
 START_TIMEOUT = 30
 UNIT = "ai-packages-upgrade"
-# Keep the installed configuration files instead of stopping to ask.
+# Keep the installed configuration files instead of stopping to ask. New
+# dependencies are installed (as `apt upgrade` does); nothing is ever removed.
 APT_UPGRADE = [
     "apt-get",
     "upgrade",
     "-y",
     "-q",
+    "--with-new-pkgs",
     "-o",
     "Dpkg::Options::=--force-confdef",
     "-o",
@@ -76,7 +84,11 @@ def _tail(text: str, lines: int = 5) -> str:
 
 
 def pending(run: Runner) -> dict:
-    """List upgradable packages by kind, without refreshing the indexes."""
+    """List upgradable packages by kind, without refreshing the indexes.
+
+    Packages a plain upgrade would skip are left out of ``total`` and the name
+    lists, counted in ``waiting``, and given a ``reason`` in ``packages``.
+    """
     try:
         code, out = run(["apt", "list", "--upgradable"], LIST_TIMEOUT)
     except OSError as exc:
@@ -96,13 +108,67 @@ def pending(run: Runner) -> dict:
             ),
         }
     groups = group_updates(out)
+    every = [*groups.critical, *groups.stable, *groups.not_recommended]
+    reasons = apt_reasons.explain(run, [item.name for item in every])
+    rows = []
+    for item in every:
+        row = {
+            "name": item.name,
+            "installed_version": item.old_version or "",
+            "candidate_version": item.version,
+        }
+        if item.name in reasons:
+            row["reason"] = apt_reasons.REASONS[reasons[item.name]]
+            row["skipped"] = reasons[item.name]
+        rows.append(row)
+
+    def names(items: list) -> list[str]:
+        return [item.name for item in items if item.name not in reasons]
+
     return {
         "ok": True,
-        "total": groups.total,
-        "security": [item.name for item in groups.critical],
-        "stable": [item.name for item in groups.stable],
-        "untested": [item.name for item in groups.not_recommended],
+        "total": len(every) - len(reasons),
+        "waiting": len(reasons),
+        "security": names(groups.critical),
+        "stable": names(groups.stable),
+        "untested": names(groups.not_recommended),
+        "packages": rows,
     }
+
+
+def status(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
+    """What is upgradable now, without refreshing the indexes (read-only)."""
+    result = pending(run)
+    result["checked_at"] = time.time()
+    result["reboot_required"] = reboot_flag.exists()
+    return result
+
+
+def log_path(state: Path) -> Path:
+    """The run log: LOG in production, beside the state elsewhere (tests)."""
+    return LOG if state == STATE else state / "ai-packages.log"
+
+
+def note(log: Path, text: str) -> None:
+    """Append one timestamped line per text line to the run log."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    lines = "".join(f"{stamp} {line}\n" for line in text.splitlines() if line.strip())
+    with contextlib.suppress(OSError):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(lines)
+
+
+def describe(listing: dict) -> list[str]:
+    """Log lines for a pending() result: one per package, with versions."""
+    if not listing.get("ok"):
+        return [f"listing failed: {listing.get('error')}"]
+    lines = [f"{listing['total']} to install, {listing.get('waiting', 0)} waiting"]
+    for row in listing.get("packages", []):
+        versions = f"{row['installed_version'] or '?'} -> {row['candidate_version']}"
+        reason = f" [{row['reason']}]" if row.get("reason") else ""
+        lines.append(f"  {row['name']} {versions}{reason}")
+    return lines
 
 
 def check(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
@@ -113,10 +179,7 @@ def check(run: Runner, reboot_flag: Path = REBOOT_FLAG) -> dict:
             "ok": False,
             "error": _tail(out) or f"apt-get update exited with {code}",
         }
-    result = pending(run)
-    result["checked_at"] = time.time()
-    result["reboot_required"] = reboot_flag.exists()
-    return result
+    return status(run, reboot_flag)
 
 
 def start_command(lock: Path) -> list[str]:
@@ -242,14 +305,15 @@ def upgrade(
 
 def _log(log: Path, mode: str, result: dict) -> None:
     if not result["ok"]:
-        outcome = "FAILED: " + result["error"].splitlines()[-1]
+        outcome = "FAILED: " + (result.get("error") or "no error text").splitlines()[-1]
     elif mode == "upgrade":
         outcome = f"{result['upgraded']} upgraded, {result['remaining']} remaining"
     else:
-        outcome = f"{result['total']} available"
-    line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {mode}: {outcome}\n"
-    with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as handle:
-        handle.write(line)
+        outcome = f"{result['total']} available, {result.get('waiting', 0)} waiting"
+    lines = [f"{mode}: {outcome}"]
+    if mode != "upgrade":
+        lines += describe(result)[1:]
+    note(log, "\n".join(lines))
 
 
 def main(
@@ -260,8 +324,12 @@ def main(
     reboot_flag: Path = REBOOT_FLAG,
 ) -> int:
     """CLI entry: ``check`` or ``upgrade``; prints one JSON document."""
-    if argv not in (["check"], ["upgrade"]):
-        print(json.dumps({"ok": False, "error": "usage: ai-packages check|upgrade"}))
+    if argv not in (["check"], ["upgrade"], ["status"]):
+        print(
+            json.dumps(
+                {"ok": False, "error": "usage: ai-packages check|upgrade|status"}
+            )
+        )
         return 2
     if os.geteuid() != 0:
         print(json.dumps({"ok": False, "error": "ai-packages must run as root"}))
@@ -269,6 +337,13 @@ def main(
     mode = argv[0]
     if mode == "upgrade":
         result = upgrade(run, reboot_flag, lock)
+    elif mode == "status":
+        with exclusive(lock) as acquired:
+            result = (
+                status(run, reboot_flag)
+                if acquired
+                else {"ok": False, "busy": True, "error": "a package run is active"}
+            )
     else:
         with exclusive(lock) as acquired:
             if not acquired:

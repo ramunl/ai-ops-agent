@@ -48,7 +48,11 @@ def cli(tmp_path):
 def test_check_refreshes_then_groups_updates(tmp_path):
     run = FakeRun()
     result = package_updates.check(run, tmp_path / "absent")
-    assert [call[:2] for call in run.calls] == [["apt-get", "update"], ["apt", "list"]]
+    assert [call[:2] for call in run.calls] == [
+        ["apt-get", "update"],
+        ["apt", "list"],
+        ["apt-get", "-s"],
+    ]
     assert result["ok"] is True
     assert result["total"] == 3
     assert result["security"] == ["openssl"]

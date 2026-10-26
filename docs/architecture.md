@@ -65,7 +65,7 @@ service restarts are mocked in the operation tests.
 
 ## Package upgrade outcomes and dashboard handoff
 
-`ai-packages check|upgrade` retains its fixed arguments, one JSON document,
+`ai-packages check|upgrade|status` retains its fixed arguments, one JSON document,
 exit convention (0 for `ok`, 1 for failure), and existing field names. Both
 CLI upgrades and the bot's asynchronous start launch a standard-library Python
 worker in `ai-packages-upgrade.service`. The launcher never runs apt directly.

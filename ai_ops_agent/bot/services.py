@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from pathlib import Path
 
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from ai_agent_common.buttons import keyboard, make_callback_data, parse_callback_data
-from ai_ops_agent import config, service_control
+from ai_ops_agent import config, package_updates, service_control
 from ai_ops_agent.bot.transport import (
     expandable_html,
     is_authorized,
@@ -136,9 +137,25 @@ async def service_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.edit_message_text(_result_text(service, result), parse_mode="HTML")
 
 
+PACKAGE_LOG_LINES = 40
+
+
+def package_log(path: Path | None = None, lines: int = PACKAGE_LOG_LINES) -> str:
+    """The last lines of the package check/upgrade log (ai-packages)."""
+    try:
+        text = (path or package_updates.LOG).read_text(encoding="utf-8")
+    except OSError:
+        return "No package runs logged yet."
+    return "\n".join(text.splitlines()[-lines:]) or "No package runs logged yet."
+
+
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show recent logs for a whitelisted service."""
+    """Show recent logs for a whitelisted service, or the package runs."""
     if not is_authorized(update):
+        return
+    if context.args == ["packages"]:
+        text = await asyncio.to_thread(package_log)
+        await reply_expandable(update, "📋 Logs — package checks and upgrades", text)
         return
     service = resolve_service(context.args)
     if service is not None:
