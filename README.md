@@ -297,6 +297,8 @@ bot's `/restart` and `/logs` use too.
 ```bash
 ai-service list                 # {"ok": true, "services": [...]}
 ai-service restart ai-pm-agent  # queued with systemctl --no-block
+ai-service start ai-pm-agent    # unit verified active, then its port opened
+ai-service stop ai-pm-agent     # unit verified inactive, then its port closed
 ai-service reboot               # queued; refused while an upgrade, cleanup,
                                 # tool update or deployment is running
 ```
@@ -308,6 +310,18 @@ library only, no bot credentials. Install once:
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-service /usr/local/sbin/ai-service
 ```
+
+**Start and stop with a firewall port.** `SERVICE_PORTS` in `services_list.py`
+maps a managed service to its TCP or UDP port. `start` runs `systemctl start`,
+checks `ActiveState=active`, then `ufw allow PORT/proto`. `stop` runs
+`systemctl stop`, checks `inactive`, then `ufw deny PORT/proto`, then checks
+that nothing listens on the port and that no running Docker container publishes
+it (ufw does not block Docker-published ports). Every step is a fixed argument
+list; any timeout or nonzero exit stops the sequence. If the unit stops but the
+port cannot be closed, the JSON reports `"ok": false`, `"unit": "inactive"` and
+`"port_open"` as `true` or `null`. The bot asks for confirmation before stopping.
+Services without a `SERVICE_PORTS` entry change only the unit. No port is
+configured yet; add an entry once the unit name and port are confirmed.
 
 ## Package updates (`ai-packages`)
 
