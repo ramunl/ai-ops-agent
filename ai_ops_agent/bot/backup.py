@@ -9,6 +9,7 @@ last seven.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -21,8 +22,9 @@ from telegram.ext import Application, ContextTypes
 
 from ai_ops_agent import config
 from ai_ops_agent.backup import CIPHER
+from ai_ops_agent.backup_info import format_backup_info
 from ai_ops_agent.bot.transport import is_authorized, reply
-from ai_ops_agent.command_output import run_command, strip_exit_prefix
+from ai_ops_agent.command_output import command_failed, run_command, strip_exit_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -40,29 +42,52 @@ async def make_backup() -> dict:
         result = json.loads(strip_exit_prefix(output))
     except ValueError:
         return {"ok": False, "error": output.strip()[:300] or "no output"}
+    if command_failed(output) and isinstance(result, dict) and result.get("ok"):
+        return {"ok": False, "error": "backup command failed"}
     return result if isinstance(result, dict) else {"ok": False, "error": "bad output"}
 
 
 def caption(result: dict) -> str:
-    """What the document message says: contents, gaps and how to restore."""
+    """Keep the document caption short; source details follow in messages."""
     size = max(1, round(result.get("bytes", 0) / 1024))
-    lines = [f"🗄 Backup · {len(result.get('included', []))} files · {size} KB"]
-    if result.get("skipped"):
-        lines.append("Not on this server: " + ", ".join(result["skipped"]))
-    lines.append(f"Restore: {RESTORE}")
-    return "\n".join(lines)[:1024]  # Telegram's caption limit
+    return (
+        f"🗄 Backup · {len(result.get('included', []))} sources · {size} KB\n"
+        f"Skipped: {len(result.get('skipped', []))} sources. Details follow."
+    )
+
+
+async def send_details(bot: Any, chat_id: int, text: str) -> None:
+    """Send all plain text as escaped HTML chunks bounded even after escaping."""
+    chunk = ""
+    units = 0
+    for character in text:
+        escaped = html.escape(character)
+        width = len(escaped.encode("utf-16-le")) // 2
+        if units + width > config.TELEGRAM_MESSAGE_LIMIT:
+            await bot.send_message(chat_id, chunk, parse_mode="HTML")
+            chunk, units = "", 0
+        chunk += escaped
+        units += width
+    if chunk:
+        await bot.send_message(chat_id, chunk, parse_mode="HTML")
 
 
 async def send_backup(bot: Any, chat_id: int, result: dict) -> None:
-    """Send the archive, or say why there is none."""
+    """Send the archive and complete source details only to the owner."""
+    if chat_id != config.AUTHORIZED_CHAT_ID:
+        return
     if not result.get("ok"):
-        await bot.send_message(chat_id, f"⚠️ Backup failed: {result.get('error')}")
+        await send_details(bot, chat_id, format_backup_info(result))
         return
     path = Path(result["file"])
     with path.open("rb") as handle:
         await bot.send_document(
             chat_id, document=handle, filename=path.name, caption=caption(result)
         )
+
+    await send_details(
+        bot, chat_id, f"{format_backup_info(result)}\n\nRestore: {RESTORE}"
+    )
 
 
 async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
