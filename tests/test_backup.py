@@ -1,6 +1,7 @@
 """ai-backup: secrets and state, encrypted, kept off the server via the bot."""
 
 import asyncio
+import html
 import io
 import json
 import subprocess
@@ -150,13 +151,13 @@ def test_next_run_is_tonight_or_tomorrow():
     assert bot_backup.seconds_until(4, datetime(2026, 10, 12, 23, 0)) == 5 * 3600
 
 
-def test_caption_lists_gaps_and_how_to_restore():
+def test_caption_is_concise_and_counts_sources():
     text = bot_backup.caption(
         {"bytes": 4096, "included": ["/a", "/b"], "skipped": ["/etc/caddy/Caddyfile"]}
     )
-    assert text.startswith("🗄 Backup · 2 files · 4 KB")
-    assert "Not on this server: /etc/caddy/Caddyfile" in text
-    assert "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000" in text
+    assert text.startswith("🗄 Backup · 2 sources · 4 KB")
+    assert "Skipped: 1 sources" in text
+    assert "/etc/caddy/Caddyfile" not in text
     assert len(bot_backup.caption({"skipped": ["/x" * 900]})) <= 1024
 
 
@@ -171,11 +172,20 @@ def test_send_backup_sends_the_file_or_the_reason(tmp_path):
         "included": ["/a"],
         "skipped": [],
     }
-    asyncio.run(bot_backup.send_backup(bot, 42, ok))
+    asyncio.run(bot_backup.send_backup(bot, bot_backup.config.AUTHORIZED_CHAT_ID, ok))
     call = bot.send_document.await_args
-    assert (call.args[0], call.kwargs["filename"]) == (42, archive.name)
-    asyncio.run(bot_backup.send_backup(bot, 42, {"ok": False, "error": "no key"}))
-    bot.send_message.assert_awaited_once_with(42, "⚠️ Backup failed: no key")
+    assert (call.args[0], call.kwargs["filename"]) == (
+        bot_backup.config.AUTHORIZED_CHAT_ID,
+        archive.name,
+    )
+    asyncio.run(
+        bot_backup.send_backup(
+            bot, bot_backup.config.AUTHORIZED_CHAT_ID, {"ok": False, "error": "no key"}
+        )
+    )
+    assert "Restore: openssl enc -d" in bot.send_message.await_args_list[0].args[1]
+    assert bot.send_message.await_args.args[1] == "⚠️ Backup failed: no key"
+    assert bot.send_document.await_count == 1
 
 
 def test_make_backup_reads_failures_too():
@@ -218,3 +228,86 @@ def test_missing_container_fails_backup_instead_of_silently_skipping(paths):
         with pytest.raises(OSError, match="Container backup failed"):
             backup.run(paths, plain_copy)
     assert not paths.archives.exists()
+
+
+def test_long_details_are_complete_bounded_and_escaped(tmp_path):
+    archive = tmp_path / "backup.enc"
+    archive.write_bytes(b"encrypted")
+    result = {
+        "ok": True,
+        "file": str(archive),
+        "included": [f"/extra/{n}/<&>😀" for n in range(200)] + ["/<&" * 3000],
+        "skipped": [f"/missing/{n}" for n in range(200)],
+    }
+    bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+    asyncio.run(
+        bot_backup.send_backup(bot, bot_backup.config.AUTHORIZED_CHAT_ID, result)
+    )
+    messages = bot.send_message.await_args_list
+    assert len(messages) > 2
+    for call in messages:
+        assert call.args[0] == bot_backup.config.AUTHORIZED_CHAT_ID
+        assert call.kwargs["parse_mode"] == "HTML"
+        assert len(call.args[1].encode("utf-16-le")) // 2 <= 4000
+        assert "<" not in call.args[1]
+    restored = "".join(html.unescape(call.args[1]) for call in messages)
+    assert (
+        restored
+        == bot_backup.format_backup_info(result) + "\n\nRestore: " + bot_backup.RESTORE
+    )
+
+
+def test_failed_backup_is_escaped_without_document_or_inventory():
+    bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+    result = {"ok": False, "error": "<failure>&" * 1000, "included": ["/stale"]}
+    asyncio.run(
+        bot_backup.send_backup(bot, bot_backup.config.AUTHORIZED_CHAT_ID, result)
+    )
+    bot.send_document.assert_not_awaited()
+    text = "".join(html.unescape(c.args[1]) for c in bot.send_message.await_args_list)
+    assert text == "⚠️ Backup failed: " + result["error"]
+    assert all("<" not in c.args[1] for c in bot.send_message.await_args_list)
+
+
+def test_non_owner_cannot_receive_backup_or_trigger_command():
+    bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+    asyncio.run(bot_backup.send_backup(bot, -999, {"ok": True, "file": "/not-opened"}))
+    bot.send_document.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    with (
+        patch.object(bot_backup, "is_authorized", return_value=False),
+        patch.object(bot_backup, "make_backup", AsyncMock()) as make,
+    ):
+        asyncio.run(bot_backup.backup_cmd(SimpleNamespace(), SimpleNamespace()))
+    make.assert_not_awaited()
+
+
+def test_manual_and_nightly_use_same_owner_delivery(chat):
+    result = {"ok": True, "included": ["/example"], "skipped": []}
+    chat.effective_chat = SimpleNamespace(id=bot_backup.config.AUTHORIZED_CHAT_ID)
+    application = SimpleNamespace(bot=object())
+    with (
+        patch.object(bot_backup, "is_authorized", return_value=True),
+        patch.object(bot_backup, "make_backup", AsyncMock(return_value=result)),
+        patch.object(bot_backup, "send_backup", AsyncMock()) as send,
+    ):
+        asyncio.run(bot_backup.backup_cmd(chat, application))
+        send.assert_awaited_once_with(application.bot, chat.effective_chat.id, result)
+        send.reset_mock()
+        with patch.object(
+            bot_backup.asyncio,
+            "sleep",
+            AsyncMock(side_effect=[None, asyncio.CancelledError]),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                asyncio.run(bot_backup.backup_forever(application))
+        send.assert_awaited_once_with(application.bot, chat.effective_chat.id, result)
+
+
+@pytest.mark.parametrize(
+    "output", ['[exit 1] {"ok": true}', "Command timed out", "(exit 1)"]
+)
+def test_command_failure_never_becomes_success(output):
+    with patch.object(bot_backup, "run_command", AsyncMock(return_value=output)) as run:
+        assert asyncio.run(bot_backup.make_backup())["ok"] is False
+    run.assert_awaited_once_with([bot_backup.BACKUP_COMMAND, "run"], timeout=300)
