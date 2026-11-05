@@ -92,8 +92,13 @@ def test_directory_is_recursively_archived_and_absent_path_skipped(tmp_path):
     assert result["skipped"] == [str(missing)]
     with tarfile.open(result["file"]) as archive:
         names = archive.getnames()
-    assert any(name.endswith("var/lib/ai-coding-agent/context/session.jsonl") for name in names)
-    assert any(name.endswith("var/lib/ai-coding-agent/context/nested/note.txt") for name in names)
+    assert any(
+        name.endswith("var/lib/ai-coding-agent/context/session.jsonl") for name in names
+    )
+    assert any(
+        name.endswith("var/lib/ai-coding-agent/context/nested/note.txt")
+        for name in names
+    )
 
 
 def test_archive_over_the_size_limit_writes_nothing(tmp_path):
