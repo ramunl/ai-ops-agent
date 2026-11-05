@@ -22,6 +22,7 @@ SOURCE_LABELS = {
     ),
     "/etc/ai-agent-projects.json": "Configuration: agent project registry",
     "/var/lib/ai-coding-agent/state.json": "State: coding agent",
+    "/var/lib/ai-coding-agent/context": "State: coding agent context",
     "/var/lib/ai-deploy/state.json": "State: deployment manager",
     "/opt/ai-todos-active.txt": "State: active todos",
     "/etc/caddy/Caddyfile": "Configuration: Caddy web server",
