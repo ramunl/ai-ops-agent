@@ -35,12 +35,13 @@ FILES = (
     "/etc/ai-dashboard/ai-dashboard.env",
     "/etc/ai-agent-projects.json",
     "/var/lib/ai-coding-agent/state.json",
+    "/var/lib/ai-coding-agent/context",
     "/var/lib/ai-deploy/state.json",
     "/opt/ai-todos-active.txt",
     "/etc/caddy/Caddyfile",
 )
 KEEP = 7
-MAX_BYTES = 20 * 1024**2  # far above the real size; stops a wrong extra path
+MAX_BYTES = 20 * 1024**2  # hard cap, unchanged; an oversized source fails the run
 CIPHER = ("-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt")
 
 Encrypter = Callable[[bytes, Path, Path], None]

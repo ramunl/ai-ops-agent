@@ -4,6 +4,7 @@ import asyncio
 import html
 import io
 import json
+import os
 import subprocess
 import tarfile
 from datetime import datetime
@@ -22,6 +23,18 @@ REPO = Path(__file__).resolve().parent.parent
 def plain_copy(data: bytes, key: Path, target: Path) -> None:
     """Stand-in for openssl: write the tar.gz as is, so tests can read it."""
     target.write_bytes(data)
+
+
+def extract_restore(archive_bytes: bytes, destination: Path) -> None:
+    """Test-only safe restore: extract into an empty dir without escaping it.
+
+    Restore stays a manual Ops step (docs/backup-restore.md), never an ai-backup
+    subcommand, so this helper exists only to prove that the documented procedure
+    keeps every member inside the destination and never writes over live paths.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as archive:
+        archive.extractall(path=destination, filter="data")
 
 
 @pytest.fixture
@@ -53,6 +66,117 @@ def test_run_packs_the_files_and_reports_what_was_missing(paths):
         secret = archive.extractfile(paths.files[0].lstrip("/")).read()
     assert names == sorted(name.lstrip("/") for name in paths.files[:2])
     assert secret == b"TELEGRAM_BOT_TOKEN=123:abc\n"
+
+
+def test_directory_is_recursively_archived_and_absent_path_skipped(tmp_path):
+    context = tmp_path / "var" / "lib" / "ai-coding-agent" / "context"
+    context.mkdir(parents=True)
+    (context / "session.jsonl").write_text('{"role": "user", "content": "hi"}\n')
+    nested = context / "nested"
+    nested.mkdir()
+    (nested / "note.txt").write_text("inner")
+    missing = tmp_path / "does-not-exist"
+    key = tmp_path / "key"
+    key.write_text("passphrase\n")
+    paths = backup.Paths(
+        key=key,
+        extra=tmp_path / "extra-paths",
+        archives=tmp_path / "archives",
+        status=tmp_path / "status" / "status.json",
+        lock=tmp_path / "lock",
+        files=(str(context), str(missing)),
+    )
+    result = backup.run(paths, plain_copy)
+    assert result["ok"] is True
+    assert result["included"] == [str(context)]
+    assert result["skipped"] == [str(missing)]
+    with tarfile.open(result["file"]) as archive:
+        names = archive.getnames()
+    assert any(
+        name.endswith("var/lib/ai-coding-agent/context/session.jsonl") for name in names
+    )
+    assert any(
+        name.endswith("var/lib/ai-coding-agent/context/nested/note.txt")
+        for name in names
+    )
+
+
+def test_archive_over_the_size_limit_writes_nothing(tmp_path):
+    big = tmp_path / "big.dat"
+    big.write_bytes(os.urandom(21 * 1024**2))
+    key = tmp_path / "key"
+    key.write_text("passphrase\n")
+    paths = backup.Paths(
+        key=key,
+        extra=tmp_path / "extra-paths",
+        archives=tmp_path / "archives",
+        files=(str(big),),
+    )
+    result = backup.run(paths, plain_copy)
+    assert result["ok"] is False
+    assert "too large" in result["error"]
+    assert not paths.archives.exists()
+    assert backup.MAX_BYTES == 20 * 1024**2
+
+
+def test_symlinks_are_stored_not_followed_and_secrets_stay_out(tmp_path):
+    context = tmp_path / "var" / "lib" / "ai-coding-agent" / "context"
+    context.mkdir(parents=True)
+    (context / "session.jsonl").write_text('{"role": "user", "content": "hi"}\n')
+    outside = tmp_path / "outside-secret.env"
+    outside.write_text("OUTSIDE_TOKEN=must-not-be-archived")
+    (context / "leak").symlink_to(outside)
+    key = tmp_path / "key"
+    key.write_text("passphrase\n")
+    paths = backup.Paths(
+        key=key,
+        extra=tmp_path / "extra-paths",
+        archives=tmp_path / "archives",
+        status=tmp_path / "status" / "status.json",
+        lock=tmp_path / "lock",
+        files=(str(context),),
+    )
+    result = backup.run(paths, plain_copy)
+    assert result["ok"] is True
+    assert Path(result["file"]).stat().st_mode & 0o077 == 0
+    with tarfile.open(result["file"]) as archive:
+        members = {member.name: member for member in archive.getmembers()}
+        link_name = next(name for name in members if name.endswith("context/leak"))
+        assert members[link_name].issym()
+        assert members[link_name].linkname == str(outside)
+        for member in archive.getmembers():
+            if member.isreg():
+                assert b"OUTSIDE_TOKEN" not in archive.extractfile(member).read()
+
+
+def test_isolated_restore_decrypts_to_a_temp_dir_and_leaves_live_state(paths, tmp_path):
+    result = backup.run(paths)  # the system openssl
+    decrypted = subprocess.run(
+        ["openssl", "enc", "-d", *backup.CIPHER[:-1], "-pass", f"file:{paths.key}"],
+        input=Path(result["file"]).read_bytes(),
+        capture_output=True,
+        check=True,
+    ).stdout
+    before = {name: Path(name).read_bytes() for name in paths.files[:2]}
+    destination = tmp_path / "restore"
+    extract_restore(decrypted, destination)
+    assert (destination / paths.files[0].lstrip("/")).read_bytes() == (
+        b"TELEGRAM_BOT_TOKEN=123:abc\n"
+    )
+    assert all(Path(name).read_bytes() == data for name, data in before.items())
+
+
+def test_restore_refuses_a_member_that_would_escape(tmp_path):
+    crafted = io.BytesIO()
+    with tarfile.open(fileobj=crafted, mode="w") as archive:
+        payload = b"pwned"
+        info = tarfile.TarInfo("../escape.txt")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    destination = tmp_path / "restore"
+    with pytest.raises(tarfile.TarError):
+        extract_restore(crafted.getvalue(), destination)
+    assert not (destination.parent / "escape.txt").exists()
 
 
 def test_extra_paths_are_added_but_comments_and_relative_paths_ignored(paths, tmp_path):
