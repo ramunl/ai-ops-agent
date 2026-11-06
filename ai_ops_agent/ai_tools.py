@@ -34,8 +34,27 @@ def version_status(installed: str, latest: str) -> str:
     return f"update available: {latest}"
 
 
-async def inspect_tool(system: dict) -> dict[str, str]:
-    """Collect the configured tool version, model, and update status."""
+async def inspect_tool(system: dict) -> dict[str, str | bool]:
+    """Collect the configured tool version, model, and update status.
+
+    Read-only tools (manifest discoveries without a reviewed install spec) run
+    no commands and carry no version_cmd, so they are reported without probing.
+    """
+    name = system["name"]
+    if system.get("executable") is False:
+        return {
+            "name": name,
+            "installed": "no",
+            "version": "unknown",
+            "model": "unknown",
+            "package_manager": "unknown",
+            "package": system.get("package", "unknown"),
+            "latest": "unknown",
+            "status": "read-only",
+            "update_command": f"/ai_tools update {name}",
+            "executable": False,
+        }
+
     version_cmd = list(system["version_cmd"])
     version_raw, latest, model = await asyncio.gather(
         run_command(version_cmd, timeout=30),
@@ -46,7 +65,7 @@ async def inspect_tool(system: dict) -> dict[str, str]:
     )
     installed = parse_tool_version(version_raw)
     return {
-        "name": system["name"],
+        "name": name,
         "installed": "yes" if installed != "not installed" else "no",
         "version": installed,
         "model": model,
@@ -54,13 +73,25 @@ async def inspect_tool(system: dict) -> dict[str, str]:
         "package": system.get("package", "unknown"),
         "latest": latest,
         "status": version_status(installed, latest),
-        "update_command": f"/ai_tools update {system['name']}",
+        "update_command": f"/ai_tools update {name}",
+        "executable": True,
     }
 
 
 async def update_tool(system: dict) -> dict[str, str]:
-    """Update a configured npm CLI and compare its before and after versions."""
+    """Update a configured npm CLI and compare its before and after versions.
+
+    Manifest-only tools are read-only here: without a reviewed allowlist spec
+    they have no install package or version command, so they are refused.
+    """
     name = system["name"]
+    if system.get("executable") is False:
+        return {
+            "name": name,
+            "status": "failed",
+            "detail": "read-only tool: add a reviewed install spec to enable updates",
+        }
+
     package_manager = system.get("package_manager")
     package = system.get("package")
     if package_manager != "npm" or not package:
