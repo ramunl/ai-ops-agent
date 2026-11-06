@@ -34,9 +34,7 @@ _PACKAGE_RE = re.compile(r"@?[A-Za-z0-9][A-Za-z0-9._~-]*(?:/[A-Za-z0-9._~-]+)?\Z
 def _valid_package(value: str) -> bool:
     """Return True when the package is a single safe npm package name."""
     return (
-        bool(value)
-        and len(value) <= 200
-        and _PACKAGE_RE.fullmatch(value) is not None
+        bool(value) and len(value) <= 200 and _PACKAGE_RE.fullmatch(value) is not None
     )
 
 
