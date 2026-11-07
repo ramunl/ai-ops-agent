@@ -27,7 +27,8 @@ from ai_ops_agent.services_list import (  # noqa: E402
     SERVICE_PORTS,
     validate_service_ports,
 )
-from ai_ops_agent.tools_list import AI_TOOLS  # noqa: E402
+from ai_ops_agent.tool_manifest import load_merged_tools  # noqa: E402
+from ai_ops_agent.tools_list import ALLOWLIST  # noqa: E402
 
 try:
     validate_service_ports(MANAGED_SERVICES, SERVICE_PORTS)
@@ -44,31 +45,11 @@ assert DEFAULT_SERVICE in MANAGED_SERVICES, (
 # Max characters per Telegram message (hard limit is 4096).
 TELEGRAM_MESSAGE_LIMIT = 4000
 
-# AI command-line tools reported and updated by /ai_tools.
-AI_SYSTEM_INSTALLS = [
-    {
-        "name": "codex",
-        "aliases": ("openai", "openai-codex"),
-        "version_cmd": AI_TOOLS["codex"].version_cmd,
-        "package_manager": "npm",
-        "package": AI_TOOLS["codex"].package,
-        "model_env_keys": ("CODEX_MODEL", "OPENAI_MODEL", "AI_MODEL", "MODEL"),
-        "env_file": os.environ.get(
-            "AI_CODEX_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
-        ),
-    },
-    {
-        "name": "claude",
-        "aliases": ("claude-code", "anthropic"),
-        "version_cmd": AI_TOOLS["claude"].version_cmd,
-        "package_manager": "npm",
-        "package": AI_TOOLS["claude"].package,
-        "model_env_keys": ("CLAUDE_MODEL", "ANTHROPIC_MODEL", "AI_MODEL", "MODEL"),
-        "env_file": os.environ.get(
-            "AI_CLAUDE_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
-        ),
-    },
-]
+# AI command-line tools reported and updated by /ai_tools. Built once from the
+# reviewed allowlist merged with the validated Coding installed-tool manifest;
+# a missing or invalid manifest falls back to the allowlist alone. Executable
+# specs (version_cmd, package, install command) come only from the allowlist.
+AI_SYSTEM_INSTALLS = load_merged_tools(ALLOWLIST)
 
 # AI agents reported by /my_agents.
 AI_AGENT_INSTALLS = [

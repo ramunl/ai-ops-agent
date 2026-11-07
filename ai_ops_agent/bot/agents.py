@@ -23,22 +23,33 @@ from ai_ops_agent.inventory import (
     agent_names,
     resolve_ai_agents,
     resolve_ai_systems,
-    tool_names,
+    updatable_tool_names,
 )
 
 
-def _format_ai_system_info(system: dict[str, str]) -> list[str]:
-    return [
-        f"<b>{html.escape(system['name'])}</b>",
-        f"installed: <code>{html.escape(system['installed'])}</code>",
-        f"version: <code>{html.escape(system['version'])}</code>",
-        f"model: <code>{html.escape(system['model'])}</code>",
-        f"package: <code>{html.escape(system['package_manager'])}</code> "
-        f"<code>{html.escape(system['package'])}</code>",
-        f"latest: <code>{html.escape(system['latest'])}</code>",
-        f"status: <code>{html.escape(system['status'])}</code>",
-        f"update: <code>{html.escape(system['update_command'])}</code>",
-    ]
+def _format_ai_system_info(system: dict[str, str | bool]) -> list[str]:
+    lines = [f"<b>{html.escape(system['name'])}</b>"]
+    if not system.get("executable"):
+        package = system.get("package", "unknown")
+        lines.append(f"package: <code>{html.escape(package)}</code>")
+        lines.append(
+            "status: <code>read-only</code> — reviewed install spec required "
+            "for updates"
+        )
+        return lines
+    lines.extend(
+        [
+            f"installed: <code>{html.escape(system['installed'])}</code>",
+            f"version: <code>{html.escape(system['version'])}</code>",
+            f"model: <code>{html.escape(system['model'])}</code>",
+            f"package: <code>{html.escape(system['package_manager'])}</code> "
+            f"<code>{html.escape(system['package'])}</code>",
+            f"latest: <code>{html.escape(system['latest'])}</code>",
+            f"status: <code>{html.escape(system['status'])}</code>",
+            f"update: <code>{html.escape(system['update_command'])}</code>",
+        ]
+    )
+    return lines
 
 
 def _format_ai_system_update_result(result: dict[str, str]) -> list[str]:
@@ -106,7 +117,7 @@ async def ai_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if systems is None:
             await reply(
                 update,
-                "Unknown AI tool. Allowed: " + tool_names(),
+                "Unknown AI tool. Updatable: " + updatable_tool_names(),
             )
             return
 
@@ -131,11 +142,13 @@ async def ai_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if idx:
             lines.append("")
         lines.extend(_format_ai_system_info(system))
+    updatable = updatable_tool_names().split(", ")
+    commands = ", ".join(
+        f"<code>/ai_tools update {html.escape(name)}</code>" for name in updatable
+    )
     lines += [
         "",
-        "Use <code>/ai_tools update codex</code>, "
-        "<code>/ai_tools update claude</code>, or "
-        "<code>/ai_tools update all</code>.",
+        f"Use {commands}, or <code>/ai_tools update all</code>.",
     ]
     await reply_html(update, "\n".join(lines))
 

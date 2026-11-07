@@ -50,7 +50,11 @@ def _ai_system_match_keys(system: dict) -> set[str]:
 
 
 def resolve_ai_systems(args: list[str] | None) -> list[dict] | None:
-    """Return all configured AI systems, or one matched by name/alias/package."""
+    """Return all merged AI systems, or one matched by name/alias/package.
+
+    The merged source in ``config.AI_SYSTEM_INSTALLS`` contains allowlisted
+    (executable) tools plus read-only tools discovered from the manifest.
+    """
     if not args or args[0].lower() == "all":
         return list(config.AI_SYSTEM_INSTALLS)
 
@@ -67,8 +71,17 @@ def agent_names() -> str:
 
 
 def tool_names() -> str:
-    """List the configured CLI tool names for command usage messages."""
+    """List the known CLI tool names from the merged tool source."""
     return ", ".join(system["name"] for system in config.AI_SYSTEM_INSTALLS)
+
+
+def updatable_tool_names() -> str:
+    """List the CLI tools that may be updated (allowlisted install specs)."""
+    return ", ".join(
+        system["name"]
+        for system in config.AI_SYSTEM_INSTALLS
+        if system.get("executable")
+    )
 
 
 def self_service() -> str:

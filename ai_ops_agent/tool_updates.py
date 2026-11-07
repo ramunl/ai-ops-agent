@@ -1,9 +1,10 @@
 """Report and update the AI command-line tools; the dashboard calls this.
 
 Run as ``ai-tools check`` or ``ai-tools update <tool>``; prints one JSON
-document. Only names in tools_list.AI_TOOLS are accepted, so a caller can
-never choose a package or pass npm options. Same commands as the bot's
-/ai_tools.
+document. Only names in tools_list.AI_TOOLS (the repo-reviewed allowlist) are
+accepted, so a caller can never choose a package or pass npm options. Version
+and install commands come only from that allowlist, never from the Coding
+manifest. Same commands as the bot's /ai_tools.
 
 Standard library only, run with the system python3.
 """
@@ -54,6 +55,15 @@ def newer_version(installed: str | None, latest: str | None) -> bool:
     return tuple(map(int, published.groups())) > tuple(map(int, current.groups()))
 
 
+def install_command(tool: AiTool) -> list[str]:
+    """The fixed npm install command for an allowlisted tool's package.
+
+    Built here from the repo-reviewed allowlist only. The manifest never supplies
+    a package, an install command, or a version command.
+    """
+    return ["npm", "install", "-g", f"{tool.package}@latest"]
+
+
 def inspect(run: Runner, name: str) -> dict:
     """One tool's installed and published versions."""
     tool = AI_TOOLS[name]
@@ -83,7 +93,7 @@ def update(run: Runner, name: str) -> dict:
         return {"ok": False, "error": f"unknown tool '{name}'"}
     tool = AI_TOOLS[name]
     before = installed_version(run, tool)
-    code, out = run(["npm", "install", "-g", f"{tool.package}@latest"], INSTALL_TIMEOUT)
+    code, out = run(install_command(tool), INSTALL_TIMEOUT)
     if code != 0:
         tail = "\n".join(out.strip().splitlines()[-5:])
         return {"ok": False, "name": name, "error": tail or f"npm exited with {code}"}

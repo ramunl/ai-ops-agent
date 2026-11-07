@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 
 from ai_agent_common import CoreCommand
 from ai_ops_agent.bot.transport import is_authorized, reply, reply_html
+from ai_ops_agent.inventory import updatable_tool_names
 from ai_ops_agent.version import get_runtime_version
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -23,6 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the available commands and their usage."""
     if not is_authorized(update):
         return
+    tool_choices = "|".join(updatable_tool_names().split(", "))
     await reply_html(
         update,
         "🛠 <b>Ops Agent</b> — ready\n\n"
@@ -47,7 +49,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/core — shared core version\n"
         "/my_agents — installed AI agents, versions, models, and latest status\n"
         "/ai_tools — installed AI tools, versions, models, and update status\n"
-        "/ai_tools update &lt;codex|claude|all&gt; — update AI tools\n"
+        f"/ai_tools update &lt;{tool_choices}|all&gt; — update AI tools\n"
         "/ai_update [agent] — update all AI agents or one by name",
     )
 
