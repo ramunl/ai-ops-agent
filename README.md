@@ -558,3 +558,9 @@ and stop are deliberately not exposed. Existing connections disconnect on restar
 Deploy Ops before the dashboard change. The installed `ai-service` and
 `ai-clients` wrappers load these Python modules from `/opt/ai-ops-agent`; their
 wrappers/timer files are unchanged and do not need reinstalling if already present.
+
+Read-only ai-packages status/check responses include last_upgrade when an atomic
+worker result exists. This preserves the independent worker outcome across
+launcher or dashboard restarts; it never starts or retries an upgrade. Deploy
+this Ops change before the companion dashboard reconciliation change. Existing
+ai-packages wrappers import these modules and do not require reinstalling.
