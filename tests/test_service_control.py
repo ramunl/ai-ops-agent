@@ -92,6 +92,7 @@ def test_whitelist_covers_every_agent_and_the_dashboard():
         "ai-ops-agent",
         "ai-dashboard",
         "iptv-proxy",
+        "mtg",
     ]
 
 
@@ -553,3 +554,32 @@ def test_iptv_restart_and_backend_queries_use_docker():
     ]
     with pytest.raises(ValueError):
         service_control.status_args("--all")
+
+
+@pytest.mark.parametrize("failure", [None, "restart", "status", "network", "listener"])
+def test_mtg_restart_verifies_host_network_container_and_listener(failure):
+    calls = []
+
+    def run(args, timeout):
+        calls.append(args)
+        if args == ["docker", "restart", "mtg"]:
+            return (1, "restart failed") if failure == "restart" else (0, "mtg")
+        if args == ["docker", "inspect", "--format", "{{.State.Status}}", "mtg"]:
+            return 0, "exited" if failure == "status" else "running"
+        if args == [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.HostConfig.NetworkMode}}",
+            "mtg",
+        ]:
+            return 0, "bridge" if failure == "network" else "host"
+        assert args == ["ss", "-Hltn", "sport = :9443"]
+        return 0, "" if failure == "listener" else "LISTEN 0 4096 *:9443 *:*"
+
+    result = service_control.restart("mtg", run)
+    assert result["ok"] is (failure is None)
+    assert all(args[0] not in {"ufw", "systemctl"} for args in calls)
+    for action in (service_control.start, service_control.stop):
+        assert not action("mtg", run)["ok"]
+    assert len(calls) <= 4

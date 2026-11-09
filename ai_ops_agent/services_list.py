@@ -16,6 +16,7 @@ MANAGED_SERVICES = [
     "ai-ops-agent",
     "ai-dashboard",
     "iptv-proxy",
+    "mtg",
 ]
 
 
@@ -34,7 +35,7 @@ class ServicePort:
 SERVICE_PORTS: dict[str, ServicePort] = {"iptv-proxy": ServicePort(8080)}
 
 # Exact container names only; never accept arbitrary Docker targets from chat.
-DOCKER_SERVICES = {"iptv-proxy": "iptv-proxy"}
+DOCKER_SERVICES = {"iptv-proxy": "iptv-proxy", "mtg": "mtg"}
 
 
 def validate_service_ports(

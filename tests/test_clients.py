@@ -175,3 +175,57 @@ def test_media_uses_container_namespace_and_combined_network_counters():
     assert result["active"] == 1
     assert result["traffic_bytes"] == 500
     assert all(argv[2] == "1234" for argv in calls if argv[0] == "nsenter")
+
+
+def test_accept_queue_includes_over_capacity_and_multiple_listeners():
+    result = sources.listener_queue(
+        "LISTEN 4097 4096 *:9443 *:*\nLISTEN 2 128 [::]:9443 [::]:*\nLISTEN 90 100 *:2398 *:*",
+        9443,
+    )
+    assert result["accept_queue"] == 4099
+    assert result["accept_queue_capacity"] == 4224
+    assert result["accept_queue_full"] is True
+    assert sources.listener_queue("LISTEN 0 4096 *:9443 *:*", 9443)["accept_queue"] == 0
+    for text in (None, "", "LISTEN broken 4096 *:9443 *:*", "LISTEN 0 0 *:9443 *:*"):
+        assert sources.listener_queue(text, 9443) == {"accept_queue_available": False}
+
+
+def test_queue_peak_survives_recovery_but_resets_at_utc_day_boundary():
+    def report(queue):
+        return {
+            "services": [
+                {
+                    "id": "mtg",
+                    "available": True,
+                    "active": 14,
+                    "accept_queue_available": True,
+                    "accept_queue": queue,
+                }
+            ]
+        }
+
+    first = update(report(4097), {}, 1000)
+    recovered = update(report(0), first, 1030)
+    assert recovered["services"][0]["sample"]["accept_queue_peak"] == 4097
+    tomorrow = update(report(0), recovered, 86401)
+    assert tomorrow["services"][0]["sample"]["accept_queue_peak"] == 0
+
+
+def test_collect_reads_accept_queue_independently_of_native_metrics():
+    def probe(args):
+        if args == ["ss", "-Hltn"]:
+            return "LISTEN 4097 4096 *:9443 *:*"
+        if args == ["ss", "-Htn", "state", "close-wait"]:
+            return "0 0 10.0.0.1:9443 203.0.113.1:1234"
+        if args == ["ss", "-Htn", "state", "established"]:
+            return ""
+        return None
+
+    item = next(
+        x for x in sources.collect(probe, lambda _: None, 1000) if x["id"] == "mtg"
+    )
+    assert item["connections"] == 0
+    assert item["accept_queue"] == 4097
+    assert item["accept_queue_full"] is True
+    assert item["close_wait_connections"] == 1
+    assert item["metrics_available"] is False

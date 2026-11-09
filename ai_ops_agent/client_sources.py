@@ -84,6 +84,33 @@ def sockets(text: str | None, port: int | set[int]) -> dict:
     }
 
 
+def listener_queue(text: str | None, port: int) -> dict:
+    """Read TCP accept queues from ss listeners, independently of client metrics."""
+    if text is None:
+        return {"accept_queue_available": False}
+    queues = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[0] != "LISTEN":
+            continue
+        if fields[3].rpartition(":")[2] != str(port):
+            continue
+        try:
+            queued, capacity = int(fields[1]), int(fields[2])
+        except ValueError:
+            continue
+        if queued >= 0 and capacity > 0:
+            queues.append((queued, capacity))
+    if not queues:
+        return {"accept_queue_available": False}
+    return {
+        "accept_queue_available": True,
+        "accept_queue": sum(queued for queued, _ in queues),
+        "accept_queue_capacity": sum(capacity for _, capacity in queues),
+        "accept_queue_full": any(queued >= capacity for queued, capacity in queues),
+    }
+
+
 def vpn(probe: Runner, now: float) -> dict:
     """Read peer handshakes and byte counters without requesting private keys."""
     base = ["docker", "exec", "amnezia-awg2"]
@@ -190,6 +217,7 @@ def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
     """Collect the known services, isolating missing tools per service."""
     host = probe(["ss", "-Htn", "state", "established"])
     listeners = probe(["ss", "-Hltn"])
+    closing = probe(["ss", "-Htn", "state", "close-wait"])
     ports = {
         line.split()[3].rpartition(":")[2]
         for line in (listeners or "").splitlines()
@@ -205,6 +233,10 @@ def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
         ("relay", "HTTPS relay", 18080),
     ):
         item = {"id": identity, "name": name, **sockets(host, port)}
+        item.update(listener_queue(listeners, port))
+        closed = sockets(closing, port)
+        if closed["available"]:
+            item["close_wait_connections"] = closed["connections"]
         item.update(
             unit="incoming connections",
             active=item.get("connections"),
