@@ -79,6 +79,22 @@ def read_result(state: Path, run_id: str) -> dict:
     return result
 
 
+def latest_result(lock: Path) -> dict | None:
+    """Read the atomic worker result without acquiring or restarting its job."""
+    state = state_directory(lock)
+    try:
+        run_id = json.loads((state / "active.json").read_text())["run_id"]
+        if (
+            not isinstance(run_id, str)
+            or len(run_id) != 32
+            or any(c not in "0123456789abcdef" for c in run_id)
+        ):
+            return None
+        return read_result(state, run_id)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _tail(text: str, lines: int = 5) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])[-4096:]
 
@@ -354,6 +370,10 @@ def main(
                 )
                 return 1
             result = check(run, reboot_flag)
+    if mode in {"check", "status"}:
+        previous = latest_result(lock)
+        if previous is not None:
+            result["last_upgrade"] = previous
     _log(log, mode, result)
     print(json.dumps(result))
     return 0 if result["ok"] else 1

@@ -168,3 +168,25 @@ def test_corrupt_reservation_fails_closed(tmp_path):
     assert result["execution"] == "unknown"
     assert "do not retry" in result["error"]
     assert run.calls == []
+
+
+def test_read_only_status_includes_atomic_worker_result(tmp_path, capsys, monkeypatch):
+    lock = tmp_path / "lock"
+    state = package_updates.state_directory(lock)
+    run_id = "a" * 32
+    package_updates.save(state / "active.json", {"run_id": run_id})
+    job = {"run_id": run_id, "completion_confirmed": True, "ok": True, "upgraded": 1}
+    package_updates.save(state / f"{run_id}.json", job)
+    monkeypatch.setattr(package_updates.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        package_updates, "status", lambda *args: {"ok": True, "total": 0}
+    )
+    assert (
+        package_updates.main(
+            ["status"], lambda *_: (0, ""), lock, tmp_path / "log", tmp_path / "reboot"
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["last_upgrade"] == job
+    package_updates.save(state / "active.json", {"run_id": "../outside"})
+    assert package_updates.latest_result(lock) is None
