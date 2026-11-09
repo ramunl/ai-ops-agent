@@ -73,12 +73,50 @@ def restart(service: str, run: Runner = run_command) -> dict:
     """Queue a restart of a whitelisted service."""
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service == "mtg":
+        return _restart_mtg(run)
     if service in DOCKER_SERVICES:
         return _docker_action(service, "restart", run)
     code, out = run(["systemctl", "--no-block", "restart", service], 30)
     if code != 0:
         return {"ok": False, "error": out or f"systemctl exited with {code}"}
     return {"ok": True, "service": service, "queued": True}
+
+
+def _restart_mtg(run: Runner) -> dict:
+    """Restart the fixed host-network MTG container without firewall changes."""
+    code, out = run(["docker", "restart", "mtg"], UNIT_TIMEOUT)
+    if code != 0:
+        return _failed("mtg", out or "MTG restart failed", None, 9443, None)
+    code, out = run(status_args("mtg"), QUERY_TIMEOUT)
+    if code != 0 or out.strip() != "running":
+        return _failed(
+            "mtg", "MTG container is not running after restart", None, 9443, None
+        )
+    code, out = run(
+        ["docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "mtg"],
+        QUERY_TIMEOUT,
+    )
+    if code != 0 or out.strip() != "host":
+        return _failed(
+            "mtg", "MTG host network mode could not be verified", "active", 9443, None
+        )
+    code, out = run(["ss", "-Hltn", "sport = :9443"], QUERY_TIMEOUT)
+    listening = code == 0 and any(
+        len(fields := line.split()) >= 5
+        and fields[0] == "LISTEN"
+        and fields[3].rpartition(":")[2] == "9443"
+        for line in out.splitlines()
+    )
+    if not listening:
+        return _failed(
+            "mtg",
+            "MTG restarted but TCP port 9443 is not verified listening",
+            "active",
+            9443,
+            None if code else False,
+        )
+    return _done("mtg", "active", 9443, True)
 
 
 def _failed(
@@ -238,6 +276,8 @@ def start(service: str, run: Runner = run_command) -> dict:
     """
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service == "mtg":
+        return {"ok": False, "error": "MTG supports restart only"}
     if service in DOCKER_SERVICES:
         return _docker_action(service, "start", run)
     spec: ServicePort | None = SERVICE_PORTS.get(service)
@@ -269,6 +309,8 @@ def stop(service: str, run: Runner = run_command) -> dict:
     """
     if service not in MANAGED_SERVICES:
         return {"ok": False, "error": f"unknown service '{service}'"}
+    if service == "mtg":
+        return {"ok": False, "error": "MTG supports restart only"}
     if service in DOCKER_SERVICES:
         return _docker_action(service, "stop", run)
     spec: ServicePort | None = SERVICE_PORTS.get(service)

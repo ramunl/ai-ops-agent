@@ -17,6 +17,10 @@ def update(report: dict, previous: dict, now: float) -> dict:
         same_day = sample.get("day") == day
         daily = dict(sample.get("daily", {})) if same_day else {}
         peak = sample.get("peak", 0) if same_day else 0
+        queue_peak = sample.get("accept_queue_peak", 0) if same_day else 0
+        queue = item.get("accept_queue")
+        if item.get("accept_queue_available") and isinstance(queue, int):
+            queue_peak = max(queue_peak, queue)
         start = sample.get("since", now) if same_day else now
         elapsed = now - sample.get("at", now)
         reset = bool(
@@ -52,6 +56,7 @@ def update(report: dict, previous: dict, now: float) -> dict:
             "counter_times": times,
             "daily": daily,
             "peak": peak,
+            "accept_queue_peak": queue_peak,
             "counter_reset": reset,
             "incomplete": (sample.get("incomplete", False) if same_day else False)
             or reset

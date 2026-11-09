@@ -542,3 +542,19 @@ logins from known addresses and keys stay quiet. The first run learns the last
 30 days without alerting. `OPS_LOGIN_ALERTS=all` sends every login, `off`
 none; known addresses and keys are kept in `/var/lib/ai-ops-agent/login-watch.json`
 (`OPS_LOGIN_STATE`).
+
+### MTG accept queue and restart
+
+Client samples include TCP listener accept-queue occupancy/capacity, whether any
+listener is full, CLOSE_WAIT connections, and a sampled UTC-day queue peak.
+These are independent of MTG's metrics endpoint; a responsive endpoint does not
+prove that clients are being accepted. Peaks are sampled, not a complete history.
+
+`ai-service restart mtg` controls only the fixed `mtg` Docker container, checks
+that it is running with host networking and that TCP 9443 is listening. It does
+not alter firewall rules or prove end-to-end Telegram connectivity. MTG start
+and stop are deliberately not exposed. Existing connections disconnect on restart.
+
+Deploy Ops before the dashboard change. The installed `ai-service` and
+`ai-clients` wrappers load these Python modules from `/opt/ai-ops-agent`; their
+wrappers/timer files are unchanged and do not need reinstalling if already present.
