@@ -93,6 +93,7 @@ def test_whitelist_covers_every_agent_and_the_dashboard():
         "ai-dashboard",
         "iptv-proxy",
         "mtg",
+        "xray-fallback",
     ]
 
 
