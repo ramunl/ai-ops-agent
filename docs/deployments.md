@@ -159,3 +159,47 @@ independent verified worker, and return its exit status. `--no-restart` is
 explicitly rejected: it cannot establish a healthy deployed version. Bot
 callers must submit a job instead of updating themselves and scheduling a
 separate unverified restart.
+
+## Failure evidence APIs (milestone 1)
+
+`deployment.failure_events.new_failure()` builds a version 1 record from trusted
+job metadata: operation ID, configured target name/repository/service, requested
+ref and commit, previous revision (commit), UTC failure time, stable failing
+stage, exit code (or null if unavailable), rollback outcome, and sanitized
+bounded diagnostics. `failure_identity()` computes SHA-256 over UTF-8 JSON with
+sorted keys, compact separators and ASCII escaping, containing only `operation`,
+`target` (name, repo, service), and `stage`. Time, diagnostics, requested revisions
+and mutable rollback outcomes do not participate. Later callers must reuse the
+existing job's `operation` ID and the same configured target and stable stage
+names across retries and recovery; a new job or stage is a distinct failure.
+
+`FailureEvents(Store(...)).save(record)` and `.load(identity)` acquire
+`Store.lock()` internally; call them **outside** an existing store lock scope.
+The lock covers the full read/modify/write cycle and rejects contention.
+Records live in `Store.root/failure-events/<identity>.json` (normally
+`/var/lib/ai-deploy/failure-events`), independently of `state.json`, reservation
+and rollback recovery data. The directory is mode 0700 and atomic JSON files
+are mode 0600. Writes use `atomic_json`, including file and directory fsync.
+A replay preserves all original failure evidence and can update only the
+rollback outcome (`pending`, `not_required`, `succeeded`, or `failed`). A pending
+replay cannot erase an outcome; an explicit later outcome can replace an earlier
+one, such as successful recovery after failed recovery. Save returns the merged
+record. Load returns null for an absent identity; corrupt, oversized, mismatched
+or unsupported records raise `FailureRecordError` and are never overwritten by
+save. Storage I/O failures propagate to callers.
+
+`deployment.failure_diagnostics.parse_diagnostics(status, journal)` is pure and
+standard-library-only. It recognizes systemd startup failures including 217/USER,
+missing `ai-coding-runner`, traceback presence and allowlisted Python exception
+types. It emits only fixed diagnostic phrases, never raw lines, paths, exception
+messages, traceback source, command arguments or unknown payloads. Each input is
+limited to its first 65,536 characters, with a truncation marker; deduplicated
+output is bounded to 1,024 characters. Persistence validates the same vocabulary
+and bounds even for records constructed without the parser. Job metadata must
+come from trusted deployment configuration, never raw logs.
+
+This milestone provides APIs only: deployment capture, PM bridge calls, ticket
+retry scheduling and result presentation are deferred. Shipping these modules
+requires the owner to re-run `deploy/install-ai-deploy` through Ops controls when
+no transaction is queued or running; updating the Ops checkout alone does not
+update the installed manager. No server changes are part of this milestone.
