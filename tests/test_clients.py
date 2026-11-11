@@ -128,7 +128,7 @@ def test_collect_isolates_missing_services_and_never_uses_a_shell():
         return None
 
     result = sources.collect(probe, lambda url: None, 1000)
-    assert len(result) == 6
+    assert len(result) == 7
     assert all(not item["available"] for item in result)
     assert all(isinstance(argv, list) for argv in calls)
     assert not any("dump" in argv for argv in calls)
@@ -229,3 +229,36 @@ def test_collect_reads_accept_queue_independently_of_native_metrics():
     assert item["accept_queue_full"] is True
     assert item["close_wait_connections"] == 1
     assert item["metrics_available"] is False
+
+
+def test_xray_counts_only_established_inbound_connections():
+    def probe(argv):
+        if argv == ["ss", "-Htn", "state", "established"]:
+            return (
+                "0 0 [::ffff:161.35.17.201]:10443 [::ffff:203.0.113.1]:50000\n"
+                "0 0 161.35.17.201:10443 203.0.113.1:50001\n"
+                "0 0 161.35.17.201:50002 203.0.113.2:443\n"
+            )
+        if argv == ["ss", "-Hltn"]:
+            return "LISTEN 0 4096 *:10443 *:*"
+        return None
+
+    item = next(
+        s for s in sources.collect(probe, lambda _: None, 1000) if s["id"] == "xray"
+    )
+    assert item["available"]
+    assert item["active"] == 2
+    assert item["source_addresses"] == 1
+    assert item["endpoint"] == "TCP 10443"
+    assert "not authenticated" in item["note"]
+    assert "traffic_bytes" not in item
+
+
+def test_xray_missing_listener_is_unavailable_not_zero_users():
+    item = next(
+        s
+        for s in sources.collect(lambda _: "", lambda _: None, 1000)
+        if s["id"] == "xray"
+    )
+    assert not item["available"]
+    assert item["error"] == "Service is not listening"

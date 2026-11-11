@@ -228,6 +228,7 @@ def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
         ["docker", "inspect", "--format", "{{.State.StartedAt}}", "amnezia-awg2"]
     )
     for identity, name, port in (
+        ("xray", "XRay VLESS REALITY", 10443),
         ("mtproxy", "Telegram MTProxy", 2398),
         ("mtg", "Telegram mtg", 9443),
         ("relay", "HTTPS relay", 18080),
@@ -267,6 +268,14 @@ def collect(probe: Runner, http: Fetcher, now: float) -> list[dict]:
                 item.update(available=True, unit="live sessions")
         if listeners is not None and str(port) not in ports:
             item.update(available=False, error="Service is not listening")
+        if identity == "xray":
+            item.update(
+                endpoint="TCP 10443",
+                note="Established TCP sockets, not authenticated VLESS users or "
+                "unique devices. Probes may be included; multiplexing can carry "
+                "several streams per connection. User identities and traffic "
+                "counters are unavailable from this socket probe.",
+            )
         services.append(item)
     # Inspect only the fixed container's PID; query inside its network namespace.
     pid = probe(["docker", "inspect", "--format", "{{.State.Pid}}", "iptv-proxy"])
