@@ -7,10 +7,10 @@ import html
 import logging
 from pathlib import Path
 
-from ai_agent_common.buttons import keyboard, make_callback_data, parse_callback_data
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from ai_agent_common.buttons import keyboard, make_callback_data, parse_callback_data
 from ai_ops_agent import config, package_updates, service_control
 from ai_ops_agent.bot.transport import (
     expandable_html,
