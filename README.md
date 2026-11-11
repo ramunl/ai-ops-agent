@@ -584,3 +584,7 @@ The VPS could connect to its own public address on TCP 10443, but a probe from
 Roman's workstation timed out. Treat remote-client reachability as unresolved;
 an on-server connection test alone does not establish it. TCP 8080 was reachable
 from that workstation; TCP 9000 and 2398 were not.
+Connected Clients also samples XRay TCP 10443 sockets, showing source addresses
+and incoming connections without treating them as authenticated VLESS users or
+unique devices. A missing listener is reported as unavailable; per-user traffic
+counters are not inferred. The dashboard renders this report automatically.
