@@ -66,3 +66,58 @@ def run(
     except (FileNotFoundError, PermissionError, OSError) as e:
         logger.error("Command failed: %s — %s", cmd, e)
         return f"Error: {e}"
+
+
+def run_json(cmd: list[str], payload: str, timeout: int, max_output: int) -> str:
+    """Exchange bounded stdin/stdout without retaining or logging bridge errors."""
+    import selectors
+    import time
+
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+        pending = memoryview(payload.encode("utf-8"))
+        output = bytearray()
+        deadline = time.monotonic() + timeout
+        with selectors.DefaultSelector() as selector:
+            for pipe in (proc.stdin, proc.stdout):
+                os.set_blocking(pipe.fileno(), False)
+            selector.register(proc.stdin, selectors.EVENT_WRITE)
+            selector.register(proc.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                for key, _ in selector.select(remaining):
+                    if key.fileobj is proc.stdin:
+                        count = os.write(proc.stdin.fileno(), pending)
+                        pending = pending[count:]
+                        if not pending:
+                            selector.unregister(proc.stdin)
+                            proc.stdin.close()
+                    else:
+                        chunk = os.read(proc.stdout.fileno(), 8192)
+                        output.extend(chunk)
+                        if len(output) > max_output:
+                            raise ValueError
+                        if not chunk:
+                            selector.unregister(proc.stdout)
+                            proc.stdout.close()
+            code = proc.wait(timeout=max(0.001, deadline - time.monotonic()))
+        if code != 0:
+            return "Error: bridge failed"
+        return output.decode("utf-8")
+    except (OSError, ValueError, TimeoutError, subprocess.TimeoutExpired):
+        return "Error: bridge unavailable"
+    finally:
+        if proc is not None:
+            _cleanup_timeout(proc)
+            if proc.stdin is not None:
+                proc.stdin.close()

@@ -16,6 +16,8 @@ REVISION="$(git -C "$SOURCE" rev-parse HEAD)-$(date +%s)"
 DESTINATION="/usr/local/lib/ai-deploy/releases/$REVISION"
 install -d -m 755 "$DESTINATION/ai_ops_agent"
 install -m 644 "$SOURCE/ai_ops_agent/__init__.py" "$DESTINATION/ai_ops_agent/__init__.py"
+install -m 644 "$SOURCE/ai_ops_agent/shell.py" "$DESTINATION/ai_ops_agent/shell.py"
+install -m 644 "$SOURCE/ai_ops_agent/command_output.py" "$DESTINATION/ai_ops_agent/command_output.py"
 cp -r "$SOURCE/ai_ops_agent/deployment" "$DESTINATION/ai_ops_agent/"
 find "$DESTINATION" -type d -name __pycache__ -exec rm -rf '{}' +
 chmod -R go-w "$DESTINATION"

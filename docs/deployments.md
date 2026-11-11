@@ -198,8 +198,69 @@ output is bounded to 1,024 characters. Persistence validates the same vocabulary
 and bounds even for records constructed without the parser. Job metadata must
 come from trusted deployment configuration, never raw logs.
 
-This milestone provides APIs only: deployment capture, PM bridge calls, ticket
-retry scheduling and result presentation are deferred. Shipping these modules
+The failure-event milestone provides APIs only; deployment capture and recovery
+wiring are deferred. Shipping these modules
 requires the owner to re-run `deploy/install-ai-deploy` through Ops controls when
 no transaction is queued or running; updating the Ops checkout alone does not
 update the installed manager. No server changes are part of this milestone.
+
+
+## PM delivery APIs (milestone 2)
+
+`deployment.pm_bridge.build_ticket(event)` validates existing failure evidence
+and builds a bounded, single-line bug ticket. It reuses the fixed diagnostic
+vocabulary, traceback summary and truncation marker. It omits raw logs, traceback
+frames/source, environments, tokens, command arguments, repository paths and
+arbitrary refs. Target/stage metadata must come from trusted configuration;
+commit fields are included only as hexadecimal revisions. No remote errors,
+warnings, messages or task lists are written to logs or delivery state.
+
+The installed contract was verified against `/usr/local/sbin/ai-pm-todos`,
+`ai_pm_agent.task_cli`, `task_service` and `task_model`: invoke the bridge with
+**no arguments**, sending JSON on stdin. Read the explicit project's workspace,
+then add with its revision, `type=bug`, `status=open`, `priority=high`, ID and
+text. Requests are capped at 32,768 characters; text must be one nonempty line
+of at most 10,000 characters without PM metadata markers. Each invocation has a
+30-second timeout and 256 KiB stdout limit; stderr is discarded. At most two
+conflict retries refresh the revision (six calls total), with no sleeping.
+Responses must identify the expected project and revision and confirm the exact
+ID/text. `published=false` still confirms the same locally saved ticket ID;
+GitHub publication is PM's responsibility.
+
+`PMDelivery(Store(...), bridge=PMBridge())` provides these caller APIs:
+
+- `enqueue(event, now=utc_datetime)` persists the first ticket before any bridge
+  call. Its ID is the first 32 hex characters of SHA-256 over ASCII
+  `ai-deploy:<failure identity>`. Replays preserve the original text, including
+  its original rollback evidence, because PM retry-safe add requires matching
+  ID **and text**. Failure evidence can continue to record newer rollback results.
+- `load(identity)` returns delivery status, attempts, next-attempt UTC and
+  confirmed ticket ID independently of deployment/failure state.
+- `due(now=..., limit=20)` returns at most 20 due identities without calling PM.
+- `attempt_due(identity, now=...)` reserves at most one due attempt, calls PM
+  outside the lock, then persists confirmation or the next retry time. A caller
+  must schedule subsequent calls; there is no worker integration in this milestone.
+
+Omitting `now` uses the current UTC clock. Call these APIs outside `Store.lock()`;
+contention raises `DeploymentError` immediately. Claims persist a 300-second
+recovery deadline before bridge I/O. A crash consumes an attempt; after the
+deadline, restart replay uses identical ID/text. Attempt numbers fence stale
+completions. No sleeps or PM I/O occur under locks. Retries use 60, 120, 240,
+480, 960, 1,920 and 3,600-second delays, with at most eight attempts total.
+The eighth claim is provisionally exhausted, allowing a successful confirmation
+but preventing further attempts even if it crashes. An uncertain final response
+may therefore leave a saved PM task with unconfirmed exhausted delivery state.
+
+Records live under `Store.root/pm-delivery/<failure identity>.json`, with mode
+0700 directories and atomic, fsynced mode 0600 files. Status is `pending`,
+`delivered` or `exhausted`; confirmed ID remains null until validated success.
+Records are bounded to 64 KiB and capacity is 1,024 retained records, including
+completed records. Capacity errors and corrupt state fail closed without erasing
+existing records. There is no automatic pruning or retry-budget reset; archival
+policy and exhausted-ticket presentation belong to a later milestone.
+
+Event capture, rollback wiring, worker retry scheduling and result presentation
+remain outside this milestone. Installing these deployment modules requires the
+owner to run `deploy/install-ai-deploy` through Ops controls when no transaction
+is queued or running. Updating the checkout alone is insufficient. No server
+mutation is performed by this change.
