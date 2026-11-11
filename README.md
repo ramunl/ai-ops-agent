@@ -564,3 +564,23 @@ worker result exists. This preserves the independent worker outcome across
 launcher or dashboard restarts; it never starts or retries an upgrade. Deploy
 this Ops change before the companion dashboard reconciliation change. Existing
 ai-packages wrappers import these modules and do not require reinstalling.
+
+## XRay VLESS REALITY fallback
+
+The VPS endpoint is `161.35.17.201:10443` (TCP), managed by the enabled
+`xray-fallback.service` systemd unit. Ops Services and `/logs xray-fallback`
+expose its status and logs; `/restart xray-fallback` restarts it. Start opens
+TCP 10443 through UFW after verifying the unit is active; confirmed Stop stops
+it and closes that port. Existing AmneziaWG is a separate service and remains
+available. Client UUIDs, REALITY private keys, and connection links do not
+belong in this repository.
+
+Inspected on 2026-11-11: UFW is active, default incoming/routed policy is deny,
+and explicit IPv4/IPv6 rules allow TCP 10443. AmneziaWG uses Docker-published
+UDP 34159. Docker forwarding can bypass UFW input rules; check published ports
+as well as UFW when auditing exposure. This inspection does not verify any
+provider-side cloud firewall or a remote client's REALITY handshake.
+The VPS could connect to its own public address on TCP 10443, but a probe from
+Roman's workstation timed out. Treat remote-client reachability as unresolved;
+an on-server connection test alone does not establish it. TCP 8080 was reachable
+from that workstation; TCP 9000 and 2398 were not.

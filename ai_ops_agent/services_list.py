@@ -17,6 +17,7 @@ MANAGED_SERVICES = [
     "ai-dashboard",
     "iptv-proxy",
     "mtg",
+    "xray-fallback",
 ]
 
 
@@ -32,7 +33,10 @@ class ServicePort:
 # started and stopped without touching the firewall. The owner adds an entry
 # (and the unit to MANAGED_SERVICES) once the unit name and port are confirmed,
 # e.g. ``"iptv-stream": ServicePort(<port>)``.
-SERVICE_PORTS: dict[str, ServicePort] = {"iptv-proxy": ServicePort(8080)}
+SERVICE_PORTS: dict[str, ServicePort] = {
+    "iptv-proxy": ServicePort(8080),
+    "xray-fallback": ServicePort(10443),
+}
 
 # Exact container names only; never accept arbitrary Docker targets from chat.
 DOCKER_SERVICES = {"iptv-proxy": "iptv-proxy", "mtg": "mtg"}
