@@ -114,7 +114,7 @@ def test_duplicate_tool_names_are_rejected(tmp_path):
 def test_offline_fallback_when_manifest_missing(tmp_path):
     assert tool_manifest.load_manifest(tmp_path / "missing.json") is None
     merged = tool_manifest.load_merged_tools(ALLOWLIST, tmp_path / "missing.json")
-    assert [entry["name"] for entry in merged] == ["codex", "claude"]
+    assert [entry["name"] for entry in merged] == list(ALLOWLIST)
     assert all(entry["executable"] for entry in merged)
 
 

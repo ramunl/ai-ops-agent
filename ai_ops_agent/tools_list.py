@@ -54,6 +54,12 @@ _ALLOWLIST: dict[str, AiTool] = {
             "AI_CLAUDE_ENV", "/etc/ai-coding-agent/ai-coding-agent.env"
         ),
     ),
+    "opencode": AiTool(
+        version_cmd=("opencode", "--version"),
+        package=os.environ.get("AI_OPENCODE_NPM_PACKAGE", "@opencode/cli"),
+        aliases=("open-code",),
+        package_manager="npm",
+    ),
 }
 
 # Immutable reviewed install specs keyed by tool name. ``ai-tools`` and the bot

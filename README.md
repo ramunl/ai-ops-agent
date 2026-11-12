@@ -31,7 +31,7 @@ This is the **rescue tool** of the agent ecosystem — it has no Claude/OpenAI d
 | /core | Pinned `ai-agent-common` core version |
 | /my_agents | Installed AI agents, versions, git refs, service states, configured models, and latest status |
 | /ai_tools | Installed AI tools, versions, configured models, and update status |
-| /ai_tools update <codex\|claude\|all> | Update installed AI tools |
+| /ai_tools update <codex\|claude\|opencode\|all> | Update installed AI tools |
 | /ai_update [agent] | Queue safe deployment of all targets, or one by name/alias |
 | /deployments | Current and previous verified releases and operation status |
 | /rollback <coding\|pm\|ops\|dashboard> | Queue rollback of one target to its previous verified release |
@@ -409,11 +409,11 @@ file goes back where it came from.
 
 `ai_ops_agent/tool_updates.py`, installed as `/usr/local/sbin/ai-tools`, does
 what the bot's `/ai_tools` does for the dashboard, from the single list in
-`tools_list.py` (`codex`, `claude`).
+`tools_list.py` (`codex`, `claude`, `opencode`).
 
 ```bash
 ai-tools check           # installed and published version of each tool
-ai-tools update claude   # npm install -g <its package>@latest
+ai-tools update claude   # native updater for native Claude; npm otherwise
 ```
 
 Only listed tool names are accepted: no package names or npm options can be
@@ -423,6 +423,17 @@ Standard library only, no bot credentials. Install once:
 ```bash
 sudo install -m 755 /opt/ai-ops-agent/deploy/ai-tools /usr/local/sbin/ai-tools
 ```
+
+Detection uses the service PATH, then fixed user installation locations under
+the service account's home (`.local/bin`, `.npm-global/bin`, and OpenCode's
+`.opencode/bin`). No interactive shell or profile is sourced. Native Claude
+launchers pointing into `.local/share/claude/versions` use `claude update`,
+as described in [Claude's setup guide](https://code.claude.com/docs/en/setup).
+Other installations use the reviewed npm package. OpenCode defaults to the
+current `@opencode/cli` package; `AI_OPENCODE_NPM_PACKAGE` can pin the reviewed
+package family for a deployment using a different CLI generation. Adding it to
+the inventory does not install it. A fresh **Check versions** is required after
+deploying this change because the dashboard retains the previous report.
 
 Reboots use a five-second systemd timer to let the dashboard answer first.
 The guard also checks queued deployments and detached package upgrades.
