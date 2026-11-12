@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from ai_ops_agent.cleanup import Runner, exclusive, run_command
+from ai_ops_agent.tool_commands import update_command, version_command
 from ai_ops_agent.tools_list import AI_TOOLS, AiTool
 
 LOCK = Path("/run/ai-tools.lock")
@@ -32,7 +33,7 @@ USAGE = "usage: ai-tools check|update <tool>"
 
 def installed_version(run: Runner, tool: AiTool) -> str | None:
     """First line of the tool's version output, or None if it is not installed."""
-    code, out = run(list(tool.version_cmd), VERSION_TIMEOUT)
+    code, out = run(version_command(tool.version_cmd), VERSION_TIMEOUT)
     if code != 0 or not out.strip():
         return None
     return out.splitlines()[0].strip()
@@ -56,12 +57,12 @@ def newer_version(installed: str | None, latest: str | None) -> bool:
 
 
 def install_command(tool: AiTool) -> list[str]:
-    """The fixed npm install command for an allowlisted tool's package.
+    """The fixed update command for an allowlisted tool's installation.
 
-    Built here from the repo-reviewed allowlist only. The manifest never supplies
-    a package, an install command, or a version command.
+    Native Claude uses its updater; npm installs use the reviewed package.
+    The manifest never supplies a package, install command, or version command.
     """
-    return ["npm", "install", "-g", f"{tool.package}@latest"]
+    return update_command(tool.version_cmd, tool.package)
 
 
 def inspect(run: Runner, name: str) -> dict:

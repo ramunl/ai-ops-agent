@@ -6,6 +6,7 @@ import asyncio
 
 from ai_ops_agent.command_output import command_failed, run_command
 from ai_ops_agent.inventory import read_tool_model
+from ai_ops_agent.tool_commands import update_command, version_command
 
 
 def parse_tool_version(raw: str) -> str:
@@ -55,7 +56,7 @@ async def inspect_tool(system: dict) -> dict[str, str | bool]:
             "executable": False,
         }
 
-    version_cmd = list(system["version_cmd"])
+    version_cmd = version_command(system["version_cmd"])
     version_raw, latest, model = await asyncio.gather(
         run_command(version_cmd, timeout=30),
         latest_npm_version(system["package"])
@@ -102,10 +103,10 @@ async def update_tool(system: dict) -> dict[str, str]:
         }
 
     before = parse_tool_version(
-        await run_command(list(system["version_cmd"]), timeout=30)
+        await run_command(version_command(system["version_cmd"]), timeout=30)
     )
     update = await run_command(
-        ["npm", "install", "-g", f"{package}@latest"], timeout=300
+        update_command(system["version_cmd"], package), timeout=300
     )
     if command_failed(update) or update.startswith("Command timed out"):
         return {
@@ -115,7 +116,7 @@ async def update_tool(system: dict) -> dict[str, str]:
         }
 
     after = parse_tool_version(
-        await run_command(list(system["version_cmd"]), timeout=30)
+        await run_command(version_command(system["version_cmd"]), timeout=30)
     )
     if before == after:
         status = "already current"
