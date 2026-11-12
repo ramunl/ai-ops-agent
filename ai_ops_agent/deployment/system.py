@@ -14,6 +14,16 @@ import urllib.request
 from pathlib import Path
 
 from ai_ops_agent.deployment.model import DeploymentError, Target, timestamp
+from ai_ops_agent.shell import run_json
+
+
+class CommandError(DeploymentError):
+    """A command failure with a structured exit status (124 means timeout)."""
+
+    def __init__(self, message: str, exit_code: int | None) -> None:
+        """Retain status separately from sanitized human-readable errors."""
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 class System:
@@ -47,7 +57,10 @@ class System:
             )
             stdout, _ = process.communicate(timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise DeploymentError(f"{Path(args[0]).name} could not complete") from error
+            raise CommandError(
+                f"{Path(args[0]).name} could not complete",
+                124 if isinstance(error, subprocess.TimeoutExpired) else None,
+            ) from error
         finally:
             if process is not None:
                 try:
@@ -56,10 +69,40 @@ class System:
                     pass
                 process.wait()
         if process.returncode:
-            raise DeploymentError(
-                f"{Path(args[0]).name} failed (exit {process.returncode})"
+            raise CommandError(
+                f"{Path(args[0]).name} failed (exit {process.returncode})",
+                process.returncode,
             )
         return stdout.strip()
+
+    def evidence(self, target: Target) -> tuple[str, str]:
+        """Collect bounded evidence; callers persist only allowlisted facts."""
+        status = run_json(
+            [
+                "systemctl",
+                "show",
+                target.service,
+                "--property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus",
+                "--no-pager",
+            ],
+            "",
+            timeout=10,
+            max_output=65536,
+        )
+        journal = run_json(
+            [
+                "journalctl",
+                "--unit",
+                target.service,
+                "--lines=80",
+                "--no-pager",
+                "--output=cat",
+            ],
+            "",
+            timeout=10,
+            max_output=65536,
+        )
+        return status, journal
 
     def git(self, target: Target, *args: str) -> str:
         """Run Git against only the trusted target checkout."""

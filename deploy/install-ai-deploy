@@ -27,4 +27,8 @@ install -m 755 "$SOURCE/deploy/ai-deploy" /usr/local/sbin/ai-deploy
 for TARGET in ai-coding-agent ai-pm-agent ai-ops-agent ai-dashboard; do
     install -m 755 "$SOURCE/deploy/update-managed-agent" "/usr/local/sbin/update-$TARGET"
 done
+install -m 644 "$SOURCE/deploy/ai-deploy-tickets.service" /etc/systemd/system/ai-deploy-tickets.service
+install -m 644 "$SOURCE/deploy/ai-deploy-tickets.timer" /etc/systemd/system/ai-deploy-tickets.timer
+systemctl daemon-reload
+systemctl enable --now ai-deploy-tickets.timer
 echo 'Deployment manager installed; run ai-deploy status, then submit deploy TARGET main'
