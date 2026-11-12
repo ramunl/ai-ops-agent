@@ -7,8 +7,9 @@ import uuid
 from pathlib import Path
 
 from ai_ops_agent.deployment.backup import restore, snapshot
+from ai_ops_agent.deployment.failure_reporting import FailureReporting
 from ai_ops_agent.deployment.model import DeploymentError, Store, Target, timestamp
-from ai_ops_agent.deployment.system import System
+from ai_ops_agent.deployment.system import CommandError, System
 
 
 class Manager:
@@ -17,6 +18,7 @@ class Manager:
     def __init__(self, store: Store, fleet: dict[str, Target], system: System) -> None:
         """Inject storage and OS operations for isolated integration testing."""
         self.store, self.fleet, self.system = store, fleet, system
+        self.reporting = FailureReporting(store)
 
     def status(self) -> dict:
         """Report verified state separately from an unverified observed checkout."""
@@ -39,6 +41,10 @@ class Manager:
                 and record["observed_commit"] != record["current"]["commit"]
             ):
                 record["status"] = "drifted"
+            self.reporting.result(record)
+            record["history"] = [dict(item) for item in record.get("history", [])]
+            for item in record["history"]:
+                self.reporting.result(item)
             results.append(record)
         return {"targets": results, "active": state.get("active")}
 
@@ -64,6 +70,15 @@ class Manager:
         self, action: str, name: str, ref: str | None, expected: str | None = None
     ) -> dict:
         """Validate and reserve a single job before systemd starts it."""
+        try:
+            return self._reserve(action, name, ref, expected)
+        finally:
+            self.reporting.flush()
+
+    def _reserve(
+        self, action: str, name: str, ref: str | None, expected: str | None
+    ) -> dict:
+        """Reserve under the transaction lock and journal preflight failures."""
         name = {
             "coding": "ai-coding-agent",
             "pm": "ai-pm-agent",
@@ -83,24 +98,46 @@ class Manager:
             self._prune_backups(state)
             selected = list(self.fleet) if name == "all" else [name]
             commits = {}
-            for item in selected:
-                target = self.fleet[item]
-                self.system.clean(target)
-                if action == "deploy":
-                    commits[item] = self.system.resolve(target, ref or "main")
-                else:
-                    previous = state["targets"].get(item, {}).get("previous")
-                    if not previous or not previous.get("verified_at"):
-                        raise DeploymentError(
-                            "No verified previous deployment is available"
-                        )
-                    if expected is not None and previous["commit"] != expected:
-                        raise DeploymentError(
-                            "Rollback target changed; refresh and confirm again"
-                        )
-                    commits[item] = previous["commit"]
             job = {
                 "operation": uuid.uuid4().hex,
+                "action": action,
+                "requested_ref": ref,
+                "commits": commits,
+            }
+            for item in selected:
+                target = self.fleet[item]
+                try:
+                    self.system.clean(target)
+                    if action == "deploy":
+                        commits[item] = self.system.resolve(target, ref or "main")
+                    else:
+                        previous = state["targets"].get(item, {}).get("previous")
+                        if not previous or not previous.get("verified_at"):
+                            raise DeploymentError(
+                                "No verified previous deployment is available"
+                            )
+                        if expected is not None and previous["commit"] != expected:
+                            raise DeploymentError(
+                                "Rollback target changed; refresh and confirm again"
+                            )
+                        commits[item] = previous["commit"]
+                except (DeploymentError, OSError, ValueError) as error:
+                    record = state["targets"].setdefault(item, {})
+                    record.update(status="failed", error=str(error))
+                    self.reporting.capture(
+                        state,
+                        job,
+                        target,
+                        "preflight",
+                        error,
+                        self._evidence(target),
+                        "not_required",
+                    )
+                    self._history(record, job, "failed")
+                    self.store.write(state)
+                    raise
+            job = {
+                "operation": job["operation"],
                 "target": name,
                 "action": action,
                 "status": "queued",
@@ -112,6 +149,16 @@ class Manager:
             state["active"] = job
             for item in selected:
                 record = state["targets"].setdefault(item, {})
+                for key in (
+                    "failure_identity",
+                    "failure_stage",
+                    "failure_exit_code",
+                    "original_error",
+                    "rollback_outcome",
+                    "recovery_error",
+                    "reporting_error",
+                ):
+                    record.pop(key, None)
                 record.update(status="queued", operation=job["operation"], error=None)
             self.store.write(state)
             return job
@@ -127,18 +174,46 @@ class Manager:
                 if str(path) not in retained and path.is_dir():
                     shutil.rmtree(path)
 
-    def cancel_reservation(self, operation: str, error: str) -> None:
+    def cancel_reservation(
+        self, operation: str, error: str, exit_code: int | None = None
+    ) -> None:
         """Expose scheduler failure without leaving a permanent queued reservation."""
         with self.store.lock():
             state = self.store.read()
             if (state.get("active") or {}).get("operation") != operation:
                 return
             for name in state["active"]["targets"]:
-                state["targets"][name].update(status="failed", error=error)
+                record = state["targets"][name]
+                record.update(status="failed", error=error)
+                self.reporting.capture(
+                    state,
+                    state["active"],
+                    self.fleet[name],
+                    "scheduling",
+                    CommandError(error, exit_code),
+                    outcome="not_required",
+                )
+                self._history(record, state["active"], "failed")
             state["active"] = None
             self.store.write(state)
 
+        self.reporting.flush()
+
     def execute(self, operation: str) -> bool:
+        """Flush failure handoff only after releasing the transaction lock."""
+        try:
+            return self._execute(operation)
+        finally:
+            self.reporting.flush()
+
+    def _evidence(self, target: Target) -> tuple[str, str]:
+        """Evidence collection must never prevent recovery."""
+        try:
+            return self.system.evidence(target)
+        except (DeploymentError, OSError, ValueError):
+            return "", ""
+
+    def _execute(self, operation: str) -> bool:
         """Execute a reserved job; report recovery failure explicitly."""
         with self.store.lock():
             state = self.store.read()
@@ -196,7 +271,7 @@ class Manager:
         self.system.restart(target)
         return self._verified_current(state, target)
 
-    def _probe_current(self, state: dict, target: Target) -> str | None:
+    def _probe_current(self, state: dict, target: Target) -> DeploymentError | None:
         """Check the live release for rollback without gating recovery on it.
 
         Returns the startup failure, or None after recording a verified identity.
@@ -205,7 +280,7 @@ class Manager:
         try:
             self.system.restart(target)
         except DeploymentError as error:
-            return str(error)
+            return error
         self._verified_current(state, target)
         return None
 
@@ -214,12 +289,24 @@ class Manager:
         record = state["targets"][name]
         backup_path = self.store.root / f"{name}-{uuid.uuid4().hex}"
         startup_failure = None
+        stage = "baseline"
+        evidence = self._evidence(target)
         try:
             self.system.log(target, f"{job['operation']} {job['action']} started")
             self.system.clean(target)
             if job["action"] == "rollback":
                 # A broken current release must not block restoring its predecessor.
                 startup_failure = self._probe_current(state, target)
+                if startup_failure:
+                    self.reporting.capture(
+                        state,
+                        job,
+                        target,
+                        "baseline",
+                        startup_failure,
+                        self._evidence(target),
+                        prior_evidence=evidence,
+                    )
                 if startup_failure and not record.get("current"):
                     raise DeploymentError(
                         "Current release cannot start and has no verified record"
@@ -228,6 +315,7 @@ class Manager:
                 baseline = record.get("current")
             else:
                 baseline = self._baseline(state, target)
+            stage = "snapshot"
             snapshot(target, backup_path)
             job["recovery"] = {
                 "target": name,
@@ -239,15 +327,20 @@ class Manager:
                 updated_at=timestamp(),
             )
             self.store.write(state)
+            stage = "stop"
             self.system.run(["systemctl", "stop", target.service], timeout=60)
+            stage = "checkout"
             self.system.checkout(target, job["commits"][name])
             if job["action"] == "rollback":
                 requested_ref = record["previous"]["ref"]
+                stage = "rollback"
                 restore(target, Path(record["previous"]["backup"]))
                 self.system.run(["systemctl", "daemon-reload"])
             else:
                 requested_ref = job["requested_ref"] or "main"
+                stage = "install"
                 self.system.install(target)
+            stage = "health"
             self.system.restart(target)
             if startup_failure:
                 # Only the restored predecessor is verified; the failed release keeps
@@ -270,6 +363,7 @@ class Manager:
                     updated_at=timestamp(),
                 )
                 job.pop("recovery")
+                self.reporting.finish(state, job, name, "succeeded")
                 self._history(record, job, "recovered")
                 self.store.write(state)
                 self.system.log(
@@ -299,6 +393,16 @@ class Manager:
                 shutil.rmtree(old_backup, ignore_errors=True)
             return True
         except (DeploymentError, OSError, ValueError, KeyError) as error:
+            self.reporting.capture(
+                state,
+                job,
+                target,
+                stage,
+                error,
+                self._evidence(target),
+                "pending" if job.get("recovery") else "not_required",
+                prior_evidence=evidence if stage == "baseline" else ("", ""),
+            )
             record["error"] = str(error)
             if startup_failure:
                 record["error"] = (
@@ -306,6 +410,7 @@ class Manager:
                 )
             if job.get("recovery"):
                 return self._recover_interrupted(state, job)
+            self.reporting.finish(state, job, name, "not_required")
             record.update(status="failed", updated_at=timestamp())
             shutil.rmtree(backup_path, ignore_errors=True)
             self._history(record, job, "failed")
@@ -316,6 +421,20 @@ class Manager:
         recovery = job["recovery"]
         target = self.fleet[recovery["target"]]
         record = state["targets"][target.name]
+        original_error = (
+            record.get("error")
+            or record.get("original_error")
+            or "Interrupted deployment"
+        )
+        if not record.get("failure_identity"):
+            self.reporting.capture(
+                state,
+                job,
+                target,
+                "interrupted",
+                DeploymentError("Interrupted deployment"),
+                self._evidence(target),
+            )
         try:
             self.system.run(["systemctl", "stop", target.service], timeout=60)
             self.system.checkout(target, recovery["baseline"]["commit"])
@@ -331,20 +450,22 @@ class Manager:
                 if job["action"] == "deploy"
                 else "pre-rollback release"
             )
-            record["error"] = (
-                record.get("error") or "Interrupted deployment"
-            ) + f"; {restored} restored and verified"
+            record["error"] = original_error + f"; {restored} restored and verified"
+            self.reporting.finish(state, job, target.name, "succeeded")
+            record["recovery_error"] = None
             job.pop("recovery")
             # Commit restored verification before discarding its recovery bundle.
             self.store.write(state)
             shutil.rmtree(recovery["backup"], ignore_errors=True)
         except (DeploymentError, OSError, ValueError, KeyError) as error:
+            self.reporting.capture(
+                state, job, target, "recovery", error, self._evidence(target)
+            )
+            self.reporting.finish(state, job, target.name, "failed")
+            record["recovery_error"] = str(error)
             record.update(
                 status="rollback_failed",
-                error=(
-                    f"{record.get('error') or 'Deployment interrupted'}; "
-                    f"ROLLBACK FAILED: {error}"
-                ),
+                error=(f"{original_error}; ROLLBACK FAILED: {error}"),
             )
         self._history(record, job, record["status"])
         self.store.write(state)
@@ -363,6 +484,17 @@ class Manager:
                 "status": status,
                 "at": timestamp(),
                 "error": record.get("error"),
+                **{
+                    key: record.get(key)
+                    for key in (
+                        "failure_identity",
+                        "failure_stage",
+                        "failure_exit_code",
+                        "original_error",
+                        "rollback_outcome",
+                        "recovery_error",
+                    )
+                },
             }
         )
         del history[:-20]

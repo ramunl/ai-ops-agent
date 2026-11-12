@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry due deployment failure tickets
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Unit=ai-deploy-tickets.service
+
+[Install]
+WantedBy=timers.target

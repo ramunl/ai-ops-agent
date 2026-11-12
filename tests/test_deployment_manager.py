@@ -46,6 +46,9 @@ class FakeSystem(System):
             return ""
         return super().run(args, timeout, environment=environment)
 
+    def evidence(self, target):
+        return "", ""
+
     def restart(self, target):
         self.commands.append(["restart", target.name])
         self.restarts.append(git(target.repo, "rev-parse", "HEAD"))

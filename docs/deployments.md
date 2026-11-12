@@ -264,3 +264,73 @@ remain outside this milestone. Installing these deployment modules requires the
 owner to run `deploy/install-ai-deploy` through Ops controls when no transaction
 is queued or running. Updating the checkout alone is insufficient. No server
 mutation is performed by this change.
+
+## Deployment failure integration (milestone 3)
+
+This supersedes the deferred integration notes in milestones 1 and 2. Preflight,
+independent-worker scheduling, baseline verification, snapshot, stop, checkout,
+install, health, explicit rollback and recovery failures now create failure events.
+Interrupted transactions capture an `interrupted` event before recovery, unless
+an original failure intent already identifies the failure. Invalid target/action
+requests and reservation contention do not create deployment failure tickets.
+
+The manager collects systemd properties and the last 80 journal entries with
+10-second deadlines and 64 KiB output limits. Baseline evidence is captured before
+restart can erase a pre-start failure. Other failure evidence is captured before
+recovery changes the service. Only the existing allowlisted diagnostic vocabulary
+is persisted: no raw logs, traceback frames, source or arbitrary messages enter
+failure events or PM tickets. Command exit codes are structured; timeout is 124,
+and failures without an OS command status use null.
+
+Under the transaction lock, `state.json` records sanitized `failure_intents`,
+including stable identity and recovery outcome. After releasing that lock the
+manager saves through `FailureEvents` and enqueues through `PMDelivery`. Pending
+recovery intents may be saved as events but are never enqueued until an outcome
+is recorded. Successful handoffs remove the intent; active recovery retains it
+so later recovery attempts can update the event. Replaying a crash between save,
+enqueue and acknowledgment preserves identity and does not create another ticket.
+The first enqueued ticket remains immutable, including the recovery result known
+at that time. Later recovery results update event evidence, not frozen PM text.
+
+Target and history results retain their existing fields and add:
+
+- `failure_identity`, `failure_stage`, `failure_exit_code`: the original failure's
+  identity, execution stage and command status, where available.
+- `original_error`: the original deployment error, separate from the existing
+  combined human-readable `error` field.
+- `rollback_outcome`: `pending`, `not_required`, `succeeded` or `failed`.
+- `recovery_error`: the separate recovery error, cleared after successful recovery.
+- `ticket_status`: null without a failure, otherwise `pending`, `delivered` or
+  `exhausted`. Pending also covers intent awaiting outbox persistence.
+- `confirmed_ticket_id`: null until PM confirms the exact ticket ID and text.
+- `reporting_error`: a fixed safe message when reporting storage is unavailable;
+  raw storage and bridge diagnostics are not returned in this field.
+
+Failure metadata is populated when applicable. History ticket status and confirmed
+ID are resolved from the outbox at read time. Waited `deploy`/`rollback` failures
+return nonzero and include `targets` and `active` alongside the existing top-level
+`error`; `execute` retains its status JSON and zero/nonzero success convention.
+Reporting failures remain secondary and cannot prevent rollback. If the state
+filesystem itself cannot persist any writes, durable recovery/reporting naturally
+requires restoring that filesystem; reporting does not substitute for the
+transaction journal.
+
+`ai-deploy retry-tickets` is the fixed, independent retry worker. It reconciles
+unflushed intents and attempts at most 20 due records per invocation, respecting
+the existing UTC due times, leases, eight-attempt limit and bounded exponential
+backoff. It does not deploy, restart services, reset exhausted records or require
+an AI provider. PM bridge calls occur outside the deployment lock. A busy lock or
+storage failure produces a safe reporting error and nonzero exit; offline PM
+retains pending delivery and its next due time. Deployment execution only enqueues,
+so PM availability never delays restoration.
+
+The installer installs `ai-deploy-tickets.service` and enables
+`ai-deploy-tickets.timer`: first run two minutes after boot, then one minute after
+the previous worker finishes. The timer is independent of all managed agents.
+After merge, the **owner must run `deploy/install-ai-deploy` through Ops controls**
+when no deployment is queued or running, to update the installed manager and
+activate the timer. Updating the checkout alone does not install either component.
+Owner verification can use `ai-deploy status` and
+`systemctl status ai-deploy-tickets.timer`; a manual retry uses
+`ai-deploy retry-tickets`. No installer or other server mutation is run by this
+repository change.
